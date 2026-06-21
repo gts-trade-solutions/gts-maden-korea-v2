@@ -1,0 +1,34 @@
+{
+  "CallerReference": "madenkorea-media-1782021696",
+  "Comment": "MadenKorea media CDN over s3://madenkorea-media",
+  "Enabled": true,
+  "Origins": {
+    "Quantity": 1,
+    "Items": [
+      {
+        "Id": "s3-madenkorea-media",
+        "DomainName": "madenkorea-media.s3.ap-south-1.amazonaws.com",
+        "OriginPath": "",
+        "CustomHeaders": { "Quantity": 0 },
+        "S3OriginConfig": { "OriginAccessIdentity": "" },
+        "ConnectionAttempts": 3,
+        "ConnectionTimeout": 10
+      }
+    ]
+  },
+  "DefaultCacheBehavior": {
+    "TargetOriginId": "s3-madenkorea-media",
+    "ViewerProtocolPolicy": "redirect-to-https",
+    "Compress": true,
+    "AllowedMethods": {
+      "Quantity": 2,
+      "Items": ["GET", "HEAD"],
+      "CachedMethods": { "Quantity": 2, "Items": ["GET", "HEAD"] }
+    },
+    "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6"
+  },
+  "PriceClass": "PriceClass_200",
+  "DefaultRootObject": "",
+  "HttpVersion": "http2and3",
+  "IsIPV6Enabled": true
+}

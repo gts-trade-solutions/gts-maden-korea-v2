@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="MadenKorea">
+  <!-- Square merchant logo for Razorpay Checkout. Razorpay center-crops
+       to a tight circle/square, so this asset is 1:1 with all branding
+       centered, no edge bleed. White background guarantees readability
+       on any modal accent the merchant picks later. -->
+  <rect width="512" height="512" rx="64" ry="64" fill="#ffffff"/>
+
+  <!-- Coral arc — top -->
+  <path d="M 96 168 Q 256 96 416 168"
+        stroke="#ea580c" stroke-width="8" fill="none" stroke-linecap="round"/>
+
+  <!-- Wordmark stacked centered -->
+  <g font-family="Inter, -apple-system, Segoe UI, Roboto, sans-serif"
+     text-anchor="middle"
+     fill="#111827">
+    <text x="256" y="248"
+          font-size="56" font-weight="700" letter-spacing="6">MADEN</text>
+    <text x="256" y="318"
+          font-size="56" font-weight="700" letter-spacing="6">KOREA</text>
+  </g>
+
+  <!-- Blue arc — bottom -->
+  <path d="M 96 360 Q 256 432 416 360"
+        stroke="#1d4ed8" stroke-width="8" fill="none" stroke-linecap="round"/>
+</svg>
