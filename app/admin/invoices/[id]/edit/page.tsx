@@ -114,26 +114,27 @@ export default function EditInvoicePage() {
 
       setCompanies(companyData as InvoiceCompany[]);
 
-      // invoice + items
-      const { data, error: invErr } = await supabase
-        .from("invoices")
-        .select(
-          `
-          *,
-          invoice_items:invoice_items(*)
-        `
-        )
-        .eq("id", invoiceId)
-        .single();
-
-      if (invErr) {
-        console.error(invErr);
-        setError(invErr.message || "Failed to load invoice");
+      // invoice + items — read via the admin service-role endpoint. Under
+      // NextAuth the browser anon client is RLS-blocked from `invoices`
+      // (0 rows). The invoice_companies dropdown read above stays on anon
+      // (it reads fine). See app/api/admin/invoices/route.ts.
+      let inv: any;
+      try {
+        const res = await fetch(
+          `/api/admin/invoices?id=${encodeURIComponent(invoiceId)}`,
+          { credentials: "include", cache: "no-store" }
+        );
+        const payload = await res.json().catch(() => ({} as any));
+        if (!res.ok || !payload?.ok) {
+          throw new Error(payload?.error || "Failed to load invoice");
+        }
+        inv = payload.data;
+      } catch (e: any) {
+        console.error(e);
+        setError(e?.message || "Failed to load invoice");
         setLoading(false);
         return;
       }
-
-      const inv: any = data;
 
       setCompanyId(inv.company_id);
       setInvoiceNumber(inv.invoice_number || "");

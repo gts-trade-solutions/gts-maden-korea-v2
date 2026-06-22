@@ -3,7 +3,6 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabaseClient";
 import { adminWrite } from "@/lib/admin/catalog-write";
 
 import {
@@ -42,25 +41,22 @@ export default function InvoicesListPage() {
       setLoading(true);
       setError(null);
 
-      const { data, error } = await supabase
-        .from("invoices")
-        .select(
-          `
-          id,
-          invoice_number,
-          invoice_date,
-          customer_name,
-          total_amount,
-          invoice_companies:invoice_companies(display_name)
-        `
-        )
-        .order("created_at", { ascending: false });
-
-      if (error) {
-        console.error(error);
-        setError(error.message || "Failed to load invoices");
-      } else if (data) {
-        setInvoices(data as InvoiceRow[]);
+      // Read via the admin service-role endpoint — under NextAuth the browser
+      // anon client is RLS-blocked from `invoices` (0 rows). See
+      // app/api/admin/invoices/route.ts.
+      try {
+        const res = await fetch("/api/admin/invoices", {
+          credentials: "include",
+          cache: "no-store",
+        });
+        const payload = await res.json().catch(() => ({} as any));
+        if (!res.ok || !payload?.ok) {
+          throw new Error(payload?.error || "Failed to load invoices");
+        }
+        setInvoices((payload.data as InvoiceRow[]) || []);
+      } catch (err: any) {
+        console.error(err);
+        setError(err?.message || "Failed to load invoices");
       }
 
       setLoading(false);

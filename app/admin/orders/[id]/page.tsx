@@ -117,43 +117,36 @@ export default function AdminOrderDetailPage() {
 
         setOrder(ord);
 
-        const { data: ship } = await supabase
-          .from("dtdc_shipments")
-          .select(
-            "id, reference_number, status, is_active, last_error, created_at"
-          )
-          .eq("order_id", orderId)
-          .order("created_at", { ascending: false })
-          .limit(1);
-        setDtdcShipment(ship?.[0] ?? null);
-
         setOrderStatus(ord.status ?? "processing");
 
-        const [{ data: its, error: iErr }, { data: pays, error: pErr }] =
-          await Promise.all([
-            supabase
-              .from("order_items")
-              .select(
-                "product_id, sku, name, quantity, unit_price, line_total, mrp, hero_image_path"
-              )
-              .eq("order_id", orderId),
-            supabase
-              .from("payments")
-              .select("*")
-              .eq("order_id", orderId)
-              .order("created_at", { ascending: false })
-              .limit(1),
-          ]);
+        // order_items reads fine via anon. payments + dtdc_shipments are
+        // RLS-blocked for the anon client under NextAuth (0 rows), so they
+        // come from the service-role admin endpoint instead.
+        const [{ data: its, error: iErr }, detailRes] = await Promise.all([
+          supabase
+            .from("order_items")
+            .select(
+              "product_id, sku, name, quantity, unit_price, line_total, mrp, hero_image_path"
+            )
+            .eq("order_id", orderId),
+          fetch(`/api/admin/orders/${orderId}/detail`, {
+            credentials: "include",
+            cache: "no-store",
+          }),
+        ]);
 
         if (iErr) {
           console.error("Admin order: items error", iErr);
         }
-        if (pErr) {
-          console.error("Admin order: payments error", pErr);
+
+        const detail = await detailRes.json().catch(() => ({} as any));
+        if (!detailRes.ok || !detail?.ok) {
+          console.error("Admin order: detail error", detail?.error);
         }
 
         setItems(its ?? []);
-        setPayment((pays ?? [])[0] ?? null);
+        setDtdcShipment(detail?.shipment ?? null);
+        setPayment(detail?.payment ?? null);
       } catch (err) {
         console.error("Admin order: fatal error", err);
         toast.error("Failed to load order");
@@ -169,13 +162,15 @@ const handleCreateDtdc = async (force_new = false) => {
   try {
     setDtdcLoading(true);
 
-    // Check if an active shipment already exists for this order
-    const { data: existingShipment, error: existingShipmentError } = await supabase
-      .from('dtdc_shipments')
-      .select('*')
-      .eq('order_id', orderId)
-      .eq('is_active', true)
-      .maybeSingle();
+    // Check if an active shipment already exists for this order. Read via the
+    // service-role admin endpoint: the anon client returns 0 rows under
+    // NextAuth (RLS), which would let this guard wrongly create a duplicate AWB.
+    const guardRes = await fetch(
+      `/api/admin/orders/${orderId}/detail?active=1`,
+      { credentials: "include", cache: "no-store" }
+    );
+    const guardJson = await guardRes.json().catch(() => ({} as any));
+    const existingShipment = guardJson?.shipment ?? null;
 
     // If an active shipment exists and we're not forcing a new one, reuse it
     if (existingShipment) {

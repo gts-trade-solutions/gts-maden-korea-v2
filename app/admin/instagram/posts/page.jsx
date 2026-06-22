@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
 import { AdminBackBar } from "@/components/admin/AdminBackBar";
 
 export default function InstagramPostsPage() {
@@ -19,22 +18,24 @@ export default function InstagramPostsPage() {
         media_type: "image",
     });
 
-    // Load campaigns on mount
+    // Load campaigns on mount (via admin service-role endpoint — the anon
+    // Supabase client is RLS-blocked from `campaigns` under NextAuth).
     useEffect(() => {
         const loadCampaigns = async () => {
-            const { data, error } = await supabase
-                .from("campaigns")
-                .select("id, name")
-                .order("created_at", { ascending: false });
-
-            if (error) {
-                console.error("Load campaigns error:", error);
+            try {
+                const res = await fetch("/api/instagram/campaigns");
+                const json = await res.json();
+                if (!res.ok || !json.ok) {
+                    throw new Error(json.error || "Failed to load campaigns");
+                }
+                const data = json.data || [];
+                setCampaigns(data);
+                if (data.length > 0) {
+                    setSelectedCampaignId(data[0].id);
+                }
+            } catch (err) {
+                console.error("Load campaigns error:", err);
                 setMessage("Failed to load campaigns.");
-                return;
-            }
-            setCampaigns(data || []);
-            if (data && data.length > 0) {
-                setSelectedCampaignId(data[0].id);
             }
         };
 

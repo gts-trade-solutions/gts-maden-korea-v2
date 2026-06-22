@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
 import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer } from "recharts";
 
 type Point = { day: string; clicks: number; orders: number };
@@ -12,9 +11,21 @@ export default function MetricsChart({ from, to }: { from: string; to: string })
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const { data } = await supabase.rpc("influencer_timeseries", { p_from: from, p_to: to });
+      // Route through the server endpoint so the call is scoped to the
+      // logged-in influencer (under NextAuth the browser anon client has no
+      // auth.uid(), so the RPC would return empty).
+      let rows: any[] = [];
+      try {
+        const res = await fetch(
+          `/api/influencer/timeseries?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+          { credentials: "include", cache: "no-store" }
+        );
+        const body = await res.json().catch(() => ({}));
+        if (res.ok && body?.ok && Array.isArray(body.data)) rows = body.data;
+      } catch {
+        // best-effort — leave the chart empty on failure
+      }
       if (!cancelled) {
-        const rows: any[] = Array.isArray(data) ? data : [];
         setData(
           rows.map((r) => ({
             day: new Date(r.day).toLocaleDateString("en-IN", { month: "short", day: "numeric" }),

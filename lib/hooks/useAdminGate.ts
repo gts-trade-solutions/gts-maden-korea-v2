@@ -3,6 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { useAuth } from "@/lib/contexts/AuthContext";
+
+// Client auth-backend flag (mirrors server AUTH_BACKEND). Unset = Supabase.
+// Under NextAuth `supabase.auth.*` returns null, so the Supabase-session gate
+// below would bounce a valid admin to /auth/login. We branch on this flag the
+// same way AuthContext / login.tsx do.
+const NEXTAUTH = process.env.NEXT_PUBLIC_AUTH_BACKEND === "nextauth";
 
 /**
  * Guard for admin pages that perform Supabase writes.
@@ -43,6 +50,11 @@ export function useAdminGate(): {
   const [ready, setReady] = useState(false);
   const redirected = useRef(false);
 
+  // NextAuth identity comes from AuthContext (role carried in the JWT). Under
+  // NextAuth there is no `supabase.auth` session to read, so admin-ness is
+  // derived here instead.
+  const { ready: authReady, isAuthenticated, hasRole } = useAuth();
+
   useEffect(() => {
     const redirect = () => {
       if (redirected.current) return;
@@ -51,6 +63,20 @@ export function useAdminGate(): {
       router.replace(`/auth/login?redirect=${next}`);
     };
 
+    // ── NextAuth branch ──────────────────────────────────────────────
+    // Derive admin-ness from the NextAuth session via useAuth(). Don't
+    // touch supabase.auth (returns null) and never bounce a valid admin.
+    if (NEXTAUTH) {
+      if (!authReady) return; // wait for the session to resolve
+      if (!isAuthenticated || !hasRole("admin")) {
+        redirect();
+        return;
+      }
+      setReady(true);
+      return;
+    }
+
+    // ── Supabase branch (today) ──────────────────────────────────────
     let cancelled = false;
     (async () => {
       const { data } = await supabase.auth.getSession();
@@ -70,9 +96,15 @@ export function useAdminGate(): {
       cancelled = true;
       sub.subscription.unsubscribe();
     };
-  }, [router, pathname]);
+  }, [router, pathname, authReady, isAuthenticated]);
 
   async function requireSession(): Promise<string> {
+    // Under NextAuth the admin API routes these pages call are gated by the
+    // NextAuth session cookie (requireAdmin reads it), so no bearer token is
+    // required — return an empty string. Callers send it in an Authorization
+    // header that the cookie-based guard simply ignores.
+    if (NEXTAUTH) return "";
+
     const { data } = await supabase.auth.getSession();
     const token = data?.session?.access_token;
     if (!token) {

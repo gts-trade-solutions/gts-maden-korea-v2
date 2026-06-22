@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
 import { AdminBackBar } from "@/components/admin/AdminBackBar";
 
 export default function InstagramInboxPage() {
@@ -18,22 +17,24 @@ export default function InstagramInboxPage() {
   const [composeText, setComposeText] = useState("");
   const [message, setMessage] = useState("");
 
-  // Load IG accounts for current user
+  // Load IG accounts (via admin service-role endpoint — the anon Supabase
+  // client is RLS-blocked from `instagram_accounts` under NextAuth).
   useEffect(() => {
     const loadAccounts = async () => {
-      const { data, error } = await supabase
-        .from("instagram_accounts")
-        .select("id, username, ig_business_account_id");
-
-      if (error) {
-        console.error("Load instagram_accounts error:", error);
+      try {
+        const res = await fetch("/api/instagram/accounts");
+        const json = await res.json();
+        if (!res.ok || !json.ok) {
+          throw new Error(json.error || "Failed to load Instagram accounts");
+        }
+        const data = json.data || [];
+        setInstagramAccounts(data);
+        if (data.length > 0) {
+          setActiveAccountId(data[0].id);
+        }
+      } catch (err) {
+        console.error("Load instagram_accounts error:", err);
         setMessage("Failed to load Instagram accounts.");
-        return;
-      }
-
-      setInstagramAccounts(data || []);
-      if (data && data.length > 0) {
-        setActiveAccountId(data[0].id);
       }
     };
 

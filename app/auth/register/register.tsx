@@ -213,6 +213,12 @@ export default function RegisterPage() {
 
       const redirectParam = redirect || "/account";
 
+      if (NEXTAUTH) {
+        // NextAuth drives the OAuth redirect + its own /api/auth/callback.
+        await signIn(provider, { callbackUrl: redirectParam });
+        return;
+      }
+
       const { error } = await supabase.auth.signInWithOAuth({
         provider,
         options: {

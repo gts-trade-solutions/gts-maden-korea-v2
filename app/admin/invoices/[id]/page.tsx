@@ -3,7 +3,6 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { AdminBackBar } from "@/components/admin/AdminBackBar";
@@ -75,22 +74,19 @@ export default function InvoiceDetailPage() {
       setLoading(true);
       setError(null);
 
-      const { data, error } = await supabase
-        .from("invoices")
-        .select(
-          `
-          *,
-          invoice_companies:invoice_companies(*),
-          invoice_items:invoice_items(*)
-        `
-        )
-        .eq("id", invoiceId)
-        .single();
-
-      if (error) {
-        console.error(error);
-        setError(error.message || "Failed to load invoice");
-      } else if (data) {
+      // Read via the admin service-role endpoint — under NextAuth the browser
+      // anon client is RLS-blocked from `invoices` (0 rows / "not found"). See
+      // app/api/admin/invoices/route.ts.
+      try {
+        const res = await fetch(
+          `/api/admin/invoices?id=${encodeURIComponent(invoiceId)}`,
+          { credentials: "include", cache: "no-store" }
+        );
+        const payload = await res.json().catch(() => ({} as any));
+        if (!res.ok || !payload?.ok) {
+          throw new Error(payload?.error || "Failed to load invoice");
+        }
+        const data = payload.data;
         const sortedItems = (data.invoice_items || []).sort(
           (a: InvoiceItem, b: InvoiceItem) => a.position - b.position
         );
@@ -99,6 +95,9 @@ export default function InvoiceDetailPage() {
           ...(data as any),
           invoice_items: sortedItems,
         });
+      } catch (err: any) {
+        console.error(err);
+        setError(err?.message || "Failed to load invoice");
       }
 
       setLoading(false);

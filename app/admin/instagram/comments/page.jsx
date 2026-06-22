@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
 import { AdminBackBar } from "@/components/admin/AdminBackBar";
 
 export default function InstagramCommentsPage() {
@@ -20,17 +19,16 @@ export default function InstagramCommentsPage() {
     const loadPosts = async () => {
       setLoadingPosts(true);
       try {
-        const { data, error } = await supabase
-          .from("campaign_posts")
-          .select("id, caption, status, instagram_media_id, published_at")
-          .neq("instagram_media_id", null)
-          .order("published_at", { ascending: false });
-
-        if (error) {
-          console.error("Load posts error:", error);
+        // Via admin service-role endpoint — the anon Supabase client is
+        // RLS-blocked from `campaign_posts` under NextAuth.
+        const res = await fetch("/api/instagram/campaign-posts");
+        const json = await res.json();
+        if (!res.ok || !json.ok) {
+          console.error("Load posts error:", json.error);
           setMessage("Failed to load posts.");
           return;
         }
+        const data = json.data;
 
         const filtered = (data || []).filter(
           (p) => p.status === "published" && p.instagram_media_id

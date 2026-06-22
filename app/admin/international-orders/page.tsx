@@ -106,16 +106,18 @@ export default function InternationalOrdersAdminPage() {
   const active = orders.find((o) => o.id === activeId) ?? null;
 
   const load = async () => {
-    const { data, error } = await supabase
-      .from("international_orders")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(200);
-    if (error) {
-      toast.error(error.message);
+    // Read via the service-role admin endpoint: the browser anon Supabase
+    // client returns 0 rows under NextAuth (RLS on international_orders).
+    const res = await fetch("/api/admin/international-orders", {
+      credentials: "include",
+      cache: "no-store",
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || !j?.ok) {
+      toast.error(j?.error || "Failed to load requests");
       return;
     }
-    setOrders((data ?? []) as IntlOrder[]);
+    setOrders((j.data ?? []) as IntlOrder[]);
   };
 
   useEffect(() => {
