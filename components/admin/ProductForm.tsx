@@ -2,18 +2,9 @@
 
 import React, { useMemo, useState } from "react";
 import * as XLSX from "xlsx";
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "@/lib/supabaseClient";
 import { uploadMedia } from "@/lib/storage/upload-client";
 import { adminWrite } from "@/lib/admin/catalog-write";
-
-/* ──────────────────────────────────────────────────────────────
-   Supabase client (browser) — no auth logic here
-   ────────────────────────────────────────────────────────────── */
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  { auth: { persistSession: true, autoRefreshToken: true } }
-);
 
 /* ──────────────────────────────────────────────────────────────
    Types

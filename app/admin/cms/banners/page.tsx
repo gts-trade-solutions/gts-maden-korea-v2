@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { supabase } from "@/lib/supabaseClient";
 import { uploadMedia } from "@/lib/storage/upload-client";
 import { resolveMediaUrl } from "@/lib/storage/backend";
@@ -237,8 +238,14 @@ export default function BannersAdminPage() {
       const linkValue = trimmedLink;
 
       if (mode === "create") {
-        // If your DB keeps image_path NOT NULL, require image
-        if (!imageFile) throw new Error("Please select an image.");
+        // Image is required on create (DB keeps image_path NOT NULL).
+        // Block submit and surface an unmissable toast — the inline `msg`
+        // sits at the bottom of a tall modal and is easy to miss, which
+        // made a no-image submit look like a silent no-op.
+        if (!imageFile) {
+          toast.error("Please add a banner image.");
+          throw new Error("Please add a banner image.");
+        }
 
         // Pre-generate id for storage paths
         const id =

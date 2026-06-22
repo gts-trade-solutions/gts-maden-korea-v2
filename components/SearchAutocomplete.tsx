@@ -6,7 +6,7 @@ import { useTranslations } from 'next-intl';
 import { Search, Package } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '@/lib/supabaseClient';
 import { resolveMediaUrl } from '@/lib/storage/backend';
 
 interface SearchSuggestion {
@@ -16,12 +16,6 @@ interface SearchSuggestion {
   image?: string;
   url: string;
 }
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  { auth: { persistSession: true, autoRefreshToken: true } }
-);
 
 type SearchAutocompleteProps = {
   /**

@@ -14,7 +14,7 @@ import {
   Sparkles,
   Heart,
 } from "lucide-react";
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "@/lib/supabaseClient";
 import { useCart } from "@/lib/contexts/CartContext";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { useCurrency } from "@/lib/contexts/CurrencyContext";
@@ -60,12 +60,6 @@ type FeaturedTickerItem = {
   sale_starts_at?: string | null;
   sale_ends_at?: string | null;
 };
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  { auth: { persistSession: true, autoRefreshToken: true } }
-);
 
 const HEADER_H_CLASS = "h-20";
 const HEADER_DICT_CACHE_KEY = "mk_header_dicts_v1";

@@ -105,14 +105,18 @@ export async function generateMetadata({
   }
 
   if (!category) {
-    return { title: "Category Not Found | MadenKorea" };
+    // Root layout's title.template appends " | MadenKorea", so the
+    // page-level title must NOT include the brand suffix itself.
+    return { title: "Category Not Found" };
   }
 
   return {
-    title: `${category.name} | MadenKorea`,
+    title: category.name,
     description: category.description ?? undefined,
     alternates: { canonical: `/c/${params.slug}` },
     openGraph: {
+      // openGraph titles are not run through the title.template, so
+      // keep the explicit brand suffix here.
       title: `${category.name} | MadenKorea`,
       description: category.description ?? undefined,
       url: `/c/${params.slug}`,

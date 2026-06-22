@@ -554,6 +554,8 @@
   "orderFailure": {
     "title": "Payment Failed",
     "body": "We were unable to process your payment. Please try again or use a different payment method.",
+    "cancelledTitle": "Payment cancelled",
+    "cancelledBody": "You cancelled the payment — your order was not placed. You can try again anytime.",
     "reasonsHeading": "Common reasons for payment failure:",
     "reason1": "Insufficient funds in your account",
     "reason2": "Incorrect card details or CVV",

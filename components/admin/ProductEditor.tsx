@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -16,15 +16,6 @@ import ProductStoryEditor from "@/components/admin/ProductStoryEditor";
 import { uploadMedia, deleteMedia } from "@/lib/storage/upload-client";
 import { resolveMediaUrl } from "@/lib/storage/backend";
 import { adminWrite } from "@/lib/admin/catalog-write";
-
-/* ──────────────────────────────────────────────────────────────
-   Supabase
-   ────────────────────────────────────────────────────────────── */
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  { auth: { persistSession: true, autoRefreshToken: true } }
-);
 
 /* ──────────────────────────────────────────────────────────────
    Helpers

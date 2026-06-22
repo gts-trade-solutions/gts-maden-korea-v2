@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { createBrowserClient } from "@supabase/ssr";
+import { supabase } from "@/lib/supabaseClient";
 import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer } from "recharts";
 
 type Point = { day: string; clicks: number; orders: number };
@@ -10,11 +10,6 @@ export default function MetricsChart({ from, to }: { from: string; to: string })
   const [data, setData] = useState<Point[]>([]);
 
   useEffect(() => {
-    const supabase = createBrowserClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-    );
-    
     let cancelled = false;
     (async () => {
       const { data } = await supabase.rpc("influencer_timeseries", { p_from: from, p_to: to });
