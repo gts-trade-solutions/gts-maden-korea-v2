@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, ChangeEvent } from "react";
-import { supabase } from "@/lib/supabaseClient";
 import { adminWrite } from "@/lib/admin/catalog-write";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -295,15 +294,18 @@ export default function WhatsappContactsPage() {
   useEffect(() => {
     async function loadContacts() {
       setLoading(true);
-      const { data, error } = await supabase
-        .from("whatsapp_contacts")
-        .select("*")
-        .order("created_at", { ascending: false });
-
-      if (error) {
-        console.error("Error loading whatsapp_contacts", error);
-      } else {
-        setContacts((data || []) as WhatsappContact[]);
+      try {
+        const res = await fetch("/api/admin/whatsapp?resource=contacts", {
+          credentials: "include",
+        });
+        const j = await res.json().catch(() => ({}));
+        if (res.ok && j?.ok) {
+          setContacts((j.contacts || []) as WhatsappContact[]);
+        } else {
+          console.error("Error loading whatsapp_contacts", j?.error);
+        }
+      } catch (err) {
+        console.error("Error loading whatsapp_contacts", err);
       }
       setLoading(false);
     }

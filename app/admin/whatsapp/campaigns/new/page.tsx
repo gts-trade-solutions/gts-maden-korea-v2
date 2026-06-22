@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import {supabase} from "@/lib/supabaseClient";
 import { adminWrite } from "@/lib/admin/catalog-write";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -51,36 +50,34 @@ export default function NewWhatsappCampaignPage() {
       setLoading(true);
       setErrorMsg(null);
 
-      const [tplRes, contactsRes] = await Promise.all([
-        supabase
-          .from("whatsapp_templates")
-          .select(
-            "id, name, provider_template_name, category, language_code, body_preview"
-          )
-          .eq("is_active", true)
-          .order("created_at", { ascending: false }),
-        supabase
-          .from("whatsapp_contacts")
-          .select("id, phone_e164, tags")
-      ]);
+      try {
+        const [tplRes, tagsRes] = await Promise.all([
+          fetch("/api/admin/whatsapp?resource=templates&activeOnly=1", {
+            credentials: "include",
+          }),
+          fetch("/api/admin/whatsapp?resource=tags", {
+            credentials: "include",
+          }),
+        ]);
+        const tplJson = await tplRes.json().catch(() => ({}));
+        const tagsJson = await tagsRes.json().catch(() => ({}));
 
-      if (tplRes.error) {
-        console.error("Error loading templates", tplRes.error);
+        if (tplRes.ok && tplJson?.ok) {
+          setTemplates((tplJson.templates || []) as WhatsappTemplate[]);
+        } else {
+          console.error("Error loading templates", tplJson?.error);
+          setErrorMsg("Failed to load templates.");
+        }
+
+        if (tagsRes.ok && tagsJson?.ok) {
+          setAvailableTags((tagsJson.tags || []) as string[]);
+        } else {
+          console.error("Error loading contacts", tagsJson?.error);
+          setErrorMsg("Failed to load contacts.");
+        }
+      } catch (err) {
+        console.error("Error loading campaign form data", err);
         setErrorMsg("Failed to load templates.");
-      } else {
-        setTemplates((tplRes.data || []) as WhatsappTemplate[]);
-      }
-
-      if (contactsRes.error) {
-        console.error("Error loading contacts", contactsRes.error);
-        setErrorMsg("Failed to load contacts.");
-      } else {
-        const contacts = (contactsRes.data || []) as WhatsappContact[];
-        const tagsSet = new Set<string>();
-        contacts.forEach((c) => {
-          (c.tags || []).forEach((tag) => tagsSet.add(tag));
-        });
-        setAvailableTags(Array.from(tagsSet).sort());
       }
 
       setLoading(false);
@@ -119,27 +116,31 @@ export default function NewWhatsappCampaignPage() {
     setSubmitting(true);
 
     try {
-      // 1) Get matching contacts
-      let contactQuery = supabase
-        .from("whatsapp_contacts")
-        .select("id, phone_e164");
+      // 1) Get matching contacts (server resolves the tag overlap).
+      const audienceUrl =
+        audienceMode === "tags" && selectedTags.length > 0
+          ? `/api/admin/whatsapp?resource=audience-resolve&tags=${encodeURIComponent(
+              selectedTags.join(",")
+            )}`
+          : "/api/admin/whatsapp?resource=audience-resolve";
 
-      if (audienceMode === "tags" && selectedTags.length > 0) {
-        // tags overlaps selectedTags
-        contactQuery = contactQuery.overlaps("tags", selectedTags);
-      }
-
-      const { data: contacts, error: contactsError } =
-        await contactQuery;
-
-      if (contactsError) {
+      let contactList: WhatsappContact[] = [];
+      try {
+        const audRes = await fetch(audienceUrl, { credentials: "include" });
+        const audJson = await audRes.json().catch(() => ({}));
+        if (!audRes.ok || !audJson?.ok) {
+          console.error("Error fetching contacts for campaign", audJson?.error);
+          setErrorMsg("Failed to fetch contacts for this campaign.");
+          setSubmitting(false);
+          return;
+        }
+        contactList = (audJson.contacts || []) as WhatsappContact[];
+      } catch (contactsError) {
         console.error("Error fetching contacts for campaign", contactsError);
         setErrorMsg("Failed to fetch contacts for this campaign.");
         setSubmitting(false);
         return;
       }
-
-      const contactList = (contacts || []) as WhatsappContact[];
 
       if (contactList.length === 0) {
         setErrorMsg("No contacts match this audience filter.");

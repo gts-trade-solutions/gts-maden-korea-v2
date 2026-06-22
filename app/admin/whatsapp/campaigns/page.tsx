@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -28,17 +27,18 @@ export default function WhatsappCampaignsPage() {
   useEffect(() => {
     async function loadCampaigns() {
       setLoading(true);
-      const { data, error } = await supabase
-        .from("whatsapp_campaigns")
-        .select(
-          "id, name, status, scheduled_at, started_at, completed_at, total_target_count, created_at"
-        )
-        .order("created_at", { ascending: false });
-
-      if (error) {
-        console.error("Error loading whatsapp_campaigns", error);
-      } else {
-        setCampaigns(data || []);
+      try {
+        const res = await fetch("/api/admin/whatsapp?resource=campaigns", {
+          credentials: "include",
+        });
+        const j = await res.json().catch(() => ({}));
+        if (res.ok && j?.ok) {
+          setCampaigns(j.campaigns || []);
+        } else {
+          console.error("Error loading whatsapp_campaigns", j?.error);
+        }
+      } catch (err) {
+        console.error("Error loading whatsapp_campaigns", err);
       }
       setLoading(false);
     }

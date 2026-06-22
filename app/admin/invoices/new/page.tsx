@@ -102,16 +102,20 @@ export default function NewInvoicePage() {
   useEffect(() => {
     const loadCompanies = async () => {
       setLoadingCompanies(true);
-      const { data, error } = await supabase
-        .from("invoice_companies")
-        .select("id, key, display_name, address, gst_number, email")
-        .order("display_name", { ascending: true });
-
-      if (error) {
-        console.error("Error loading invoice_companies", error);
-      } else if (data) {
-        setCompanies(data as InvoiceCompany[]);
+      try {
+        const res = await fetch("/api/admin/invoice-companies", {
+          credentials: "include",
+          cache: "no-store",
+        });
+        const payload = await res.json().catch(() => ({} as any));
+        if (!res.ok || !payload?.ok) {
+          throw new Error(payload?.error || "Failed to load companies");
+        }
+        const data = (payload.data ?? []) as InvoiceCompany[];
+        setCompanies(data);
         if (data.length > 0) setCompanyId(data[0].id);
+      } catch (error) {
+        console.error("Error loading invoice_companies", error);
       }
       setLoadingCompanies(false);
     };

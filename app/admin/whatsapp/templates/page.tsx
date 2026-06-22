@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
 import { adminWrite } from "@/lib/admin/catalog-write";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -66,17 +65,18 @@ export default function WhatsappTemplatesPage() {
   useEffect(() => {
     async function loadTemplates() {
       setLoading(true);
-      const { data, error } = await supabase
-        .from("whatsapp_templates")
-        .select(
-          "id, name, provider_template_name, category, language_code, body_preview, is_active, created_at"
-        )
-        .order("created_at", { ascending: false });
-
-      if (error) {
-        console.error("Error loading whatsapp_templates", error);
-      } else {
-        setTemplates((data || []) as WhatsappTemplate[]);
+      try {
+        const res = await fetch("/api/admin/whatsapp?resource=templates", {
+          credentials: "include",
+        });
+        const j = await res.json().catch(() => ({}));
+        if (res.ok && j?.ok) {
+          setTemplates((j.templates || []) as WhatsappTemplate[]);
+        } else {
+          console.error("Error loading whatsapp_templates", j?.error);
+        }
+      } catch (err) {
+        console.error("Error loading whatsapp_templates", err);
       }
       setLoading(false);
     }

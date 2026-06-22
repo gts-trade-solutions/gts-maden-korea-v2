@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -37,60 +36,27 @@ export default function WhatsappCampaignDetailPage() {
     setInfoMsg("");
 
     try {
-      // 1) load campaign
-      const { data: camp, error: campErr } = await supabase
-        .from("whatsapp_campaigns")
-        .select(
-          "id, name, status, template_id, scheduled_at, started_at, completed_at, total_target_count, created_at"
-        )
-        .eq("id", campaignId)
-        .single();
+      const res = await fetch(
+        `/api/admin/whatsapp?resource=campaign&id=${encodeURIComponent(
+          campaignId as string
+        )}`,
+        { credentials: "include" }
+      );
+      const j = await res.json().catch(() => ({}));
 
-      if (campErr || !camp) {
-        console.error("Error loading campaign", campErr);
+      if (!res.ok || !j?.ok || !j?.campaign) {
+        console.error("Error loading campaign", j?.error);
         setErrorMsg("Failed to load campaign details.");
         setLoading(false);
         return;
       }
 
-      setCampaign(camp);
-
-      // 2) load template (if any)
-      if (camp.template_id) {
-        const { data: tpl, error: tplErr } = await supabase
-          .from("whatsapp_templates")
-          .select("id, name, provider_template_name, language_code")
-          .eq("id", camp.template_id)
-          .single();
-
-        if (!tplErr && tpl) {
-          setTemplate(tpl);
-        }
-      }
-
-      // 3) message stats
-      const [queuedRes, sentRes, failedRes] = await Promise.all([
-        supabase
-          .from("whatsapp_campaign_messages")
-          .select("id", { count: "exact", head: true })
-          .eq("campaign_id", campaignId)
-          .eq("status", "queued"),
-        supabase
-          .from("whatsapp_campaign_messages")
-          .select("id", { count: "exact", head: true })
-          .eq("campaign_id", campaignId)
-          .eq("status", "sent"),
-        supabase
-          .from("whatsapp_campaign_messages")
-          .select("id", { count: "exact", head: true })
-          .eq("campaign_id", campaignId)
-          .eq("status", "failed"),
-      ]);
-
+      setCampaign(j.campaign);
+      setTemplate(j.template || null);
       setStats({
-        queued: queuedRes.count || 0,
-        sent: sentRes.count || 0,
-        failed: failedRes.count || 0,
+        queued: j.stats?.queued || 0,
+        sent: j.stats?.sent || 0,
+        failed: j.stats?.failed || 0,
       });
     } catch (err) {
       console.error(err);

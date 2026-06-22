@@ -38,7 +38,6 @@ import {
   Clock,
 } from "lucide-react";
 import { toast } from "sonner";
-import { supabase } from "@/lib/supabaseClient";
 
 function formatINR(v?: number | null, currency?: string | null) {
   if (v == null) return "";
@@ -100,51 +99,30 @@ export default function AdminOrderDetailPage() {
       try {
         setLoading(true);
 
-        const { data: ord, error: oErr } = await supabase
-          .from("orders")
-          .select(
-            "id, order_number, status, currency, subtotal, shipping_fee, discount_total, total, subtotal_inr, shipping_fee_inr, discount_total_inr, total_inr, fx_rate_snapshot, address_snapshot, created_at, user_id"
-          )
-          .eq("id", orderId)
-          .maybeSingle();
-
-        if (oErr || !ord) {
-          console.error("Admin order: order error", oErr);
-          toast.error("Order not found");
-          setLoading(false);
-          return;
-        }
-
-        setOrder(ord);
-
-        setOrderStatus(ord.status ?? "processing");
-
-        // order_items reads fine via anon. payments + dtdc_shipments are
-        // RLS-blocked for the anon client under NextAuth (0 rows), so they
-        // come from the service-role admin endpoint instead.
-        const [{ data: its, error: iErr }, detailRes] = await Promise.all([
-          supabase
-            .from("order_items")
-            .select(
-              "product_id, sku, name, quantity, unit_price, line_total, mrp, hero_image_path"
-            )
-            .eq("order_id", orderId),
-          fetch(`/api/admin/orders/${orderId}/detail`, {
-            credentials: "include",
-            cache: "no-store",
-          }),
-        ]);
-
-        if (iErr) {
-          console.error("Admin order: items error", iErr);
-        }
+        // order + order_items + payments + dtdc_shipments all come from the
+        // service-role admin endpoint now, so RLS can be enabled on the
+        // orders/order_items tables (the anon client previously read them).
+        const detailRes = await fetch(`/api/admin/orders/${orderId}/detail`, {
+          credentials: "include",
+          cache: "no-store",
+        });
 
         const detail = await detailRes.json().catch(() => ({} as any));
         if (!detailRes.ok || !detail?.ok) {
           console.error("Admin order: detail error", detail?.error);
         }
 
-        setItems(its ?? []);
+        const ord = detail?.order ?? null;
+        if (!ord) {
+          console.error("Admin order: order not found");
+          toast.error("Order not found");
+          setLoading(false);
+          return;
+        }
+
+        setOrder(ord);
+        setOrderStatus(ord.status ?? "processing");
+        setItems(detail?.items ?? []);
         setDtdcShipment(detail?.shipment ?? null);
         setPayment(detail?.payment ?? null);
       } catch (err) {

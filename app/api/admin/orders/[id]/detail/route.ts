@@ -7,12 +7,13 @@ import { requireAdmin } from "@/lib/auth/adminGuard";
 
 // Admin: RLS-restricted slices of the order detail page. `payments` and
 // `dtdc_shipments` both return 0 rows for the browser anon client under
-// NextAuth, leaving the payment + shipment panels empty (and the create-guard
-// blind, risking a duplicate AWB). This reads them via the SERVICE-ROLE
-// client. `orders`/`order_items` read fine via anon and are left on the page.
+// NextAuth. The `orders`/`order_items` reads are also routed here now so RLS
+// can be enabled on those tables (the anon client currently still reads them —
+// the leak we're closing). All reads go through the SERVICE-ROLE client.
 //
 // `?active=1` returns just the active shipment row (for the create-guard);
-// otherwise returns { payment, shipment } mirroring the page's load() reads.
+// otherwise returns { order, items, payment, shipment } mirroring the page's
+// load() reads.
 const json = (d: any, s = 200) =>
   NextResponse.json(d, { status: s, headers: { "cache-control": "no-store" } });
 
@@ -41,7 +42,25 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     return json({ ok: true, shipment: data ?? null });
   }
 
-  const [{ data: ship, error: sErr }, { data: pays, error: pErr }] = await Promise.all([
+  const [
+    { data: ord, error: oErr },
+    { data: its, error: iErr },
+    { data: ship, error: sErr },
+    { data: pays, error: pErr },
+  ] = await Promise.all([
+    sb
+      .from("orders")
+      .select(
+        "id, order_number, status, currency, subtotal, shipping_fee, discount_total, total, subtotal_inr, shipping_fee_inr, discount_total_inr, total_inr, fx_rate_snapshot, address_snapshot, created_at, user_id"
+      )
+      .eq("id", orderId)
+      .maybeSingle(),
+    sb
+      .from("order_items")
+      .select(
+        "product_id, sku, name, quantity, unit_price, line_total, mrp, hero_image_path"
+      )
+      .eq("order_id", orderId),
     sb
       .from("dtdc_shipments")
       .select("id, reference_number, status, is_active, last_error, created_at")
@@ -55,11 +74,15 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
       .order("created_at", { ascending: false })
       .limit(1),
   ]);
+  if (oErr) return json({ ok: false, error: oErr.message }, 500);
+  if (iErr) return json({ ok: false, error: iErr.message }, 500);
   if (sErr) return json({ ok: false, error: sErr.message }, 500);
   if (pErr) return json({ ok: false, error: pErr.message }, 500);
 
   return json({
     ok: true,
+    order: ord ?? null,
+    items: its ?? [],
     shipment: (ship ?? [])[0] ?? null,
     payment: (pays ?? [])[0] ?? null,
   });

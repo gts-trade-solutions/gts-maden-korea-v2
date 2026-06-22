@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { supabase } from '@/lib/supabaseClient';
 import { Button } from '@/components/ui/button';
 import { AdminBackBar } from '@/components/admin/AdminBackBar';
 import {
@@ -45,53 +44,20 @@ export default function WhatsappDashboardPage() {
     async function loadDashboard() {
       setLoading(true);
 
-      // 1) aggregate counts
-      const [
-        contactsRes,
-        templatesRes,
-        campaignsCountRes,
-        runningCampaignsRes,
-        recentCampaignsRes,
-      ] = await Promise.all([
-        supabase
-          .from('whatsapp_contacts')
-          .select('id', { count: 'exact', head: true }),
-        supabase
-          .from('whatsapp_templates')
-          .select('id', { count: 'exact', head: true })
-          .eq('is_active', true),
-        supabase
-          .from('whatsapp_campaigns')
-          .select('id', { count: 'exact', head: true }),
-        supabase
-          .from('whatsapp_campaigns')
-          .select('id', { count: 'exact', head: true })
-          .eq('status', 'running'),
-        supabase
-          .from('whatsapp_campaigns')
-          .select(
-            'id, name, status, total_target_count, created_at'
-          )
-          .order('created_at', { ascending: false })
-          .limit(5),
-      ]);
+      try {
+        const res = await fetch('/api/admin/whatsapp?resource=stats', {
+          credentials: 'include',
+        });
+        const j = await res.json().catch(() => ({}));
 
-      const totalContacts = contactsRes.count ?? 0;
-      const activeTemplates = templatesRes.count ?? 0;
-      const totalCampaigns = campaignsCountRes.count ?? 0;
-      const runningCampaigns = runningCampaignsRes.count ?? 0;
-
-      setStats({
-        totalContacts,
-        activeTemplates,
-        totalCampaigns,
-        runningCampaigns,
-      });
-
-      if (!recentCampaignsRes.error && recentCampaignsRes.data) {
-        setRecentCampaigns(
-          recentCampaignsRes.data as DashboardCampaign[]
-        );
+        if (res.ok && j?.ok) {
+          setStats(j.stats as DashboardStats);
+          setRecentCampaigns((j.recentCampaigns || []) as DashboardCampaign[]);
+        } else {
+          console.error('Error loading whatsapp dashboard', j?.error);
+        }
+      } catch (err) {
+        console.error('Error loading whatsapp dashboard', err);
       }
 
       setLoading(false);

@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/contexts/AuthContext';
-import {supabase} from '@/lib/supabaseClient';
 import { adminWrite } from '@/lib/admin/catalog-write';
 
 import { Button } from '@/components/ui/button';
@@ -70,20 +69,6 @@ function formatINR(v?: number | null, currency?: string | null) {
   }
 }
 
-// address_snapshot can be jsonb OR a stringified JSON
-function safeParseSnapshot(v: any): any {
-  if (!v) return {};
-  if (typeof v === 'object') return v;
-  if (typeof v === 'string') {
-    try {
-      return JSON.parse(v);
-    } catch {
-      return {};
-    }
-  }
-  return {};
-}
-
 export default function AdminOrdersPage() {
   const router = useRouter();
   const { user, hasRole, logout } = useAuth();
@@ -135,130 +120,31 @@ export default function AdminOrdersPage() {
       try {
         setLoading(true);
 
-        // Base query with count + stable ordering + pagination
-        let q = supabase
-          .from('orders')
-          .select(
-            'id, order_number, status, total, currency, created_at, address_snapshot',
-            { count: 'exact' }
-          )
-          .order('created_at', { ascending: false })
-          .order('id', { ascending: false })
-          .range(from, to);
-
-        // "Awaiting shipment" filter narrows to paid orders. Final
-        // filtering for "no active shipment" happens after we fetch
-        // the dtdc_shipments rows for the page below.
-        if (filterMode === 'awaiting_shipment') {
-          q = q.eq('status', 'paid');
-        }
-
-        // NOTE:
-        // If your address_snapshot is a STRING column, server-side search using ->> won't work.
-        // So we keep server-side search to order_number only,
-        // and we do name/email filtering on client side below.
+        // The whole list (orders + per-order item count, latest payment
+        // method, active DTDC AWB/status) is assembled server-side via the
+        // service-role admin endpoint so RLS can be enabled on the
+        // orders/order_items tables. Same pagination/filter/search semantics
+        // as before; client-side name/email filtering still happens below via
+        // visibleOrders.
+        const params = new URLSearchParams();
+        params.set('page', String(page));
+        params.set('filter', filterMode);
         const s = searchQuery.trim();
-        if (s) {
-          q = q.ilike('order_number', `%${s}%`);
-        }
+        if (s) params.set('search', s);
 
-        const { data: ordersData, error: oErr, count } = await q;
-        if (oErr) throw oErr;
+        const res = await fetch(`/api/admin/orders?${params.toString()}`, {
+          credentials: 'include',
+          cache: 'no-store',
+        });
+        const payload = await res.json().catch(() => ({} as any));
+        if (!res.ok || !payload?.ok) {
+          throw new Error(payload?.error || 'Failed to load orders');
+        }
 
         if (cancelled) return;
 
-        setTotalCount(count ?? 0);
-
-        const rawOrders = ordersData || [];
-        if (rawOrders.length === 0) {
-          setOrders([]);
-          return;
-        }
-
-        const orderIds = rawOrders.map((o: any) => o.id);
-
-        // item count (current page only)
-        const { data: itemsData, error: iErr } = await supabase
-          .from('order_items')
-          .select('order_id, quantity')
-          .in('order_id', orderIds);
-
-        if (iErr) console.error('Admin orders: items error', iErr);
-
-        const itemCountMap = new Map<string, number>();
-        (itemsData || []).forEach((row: any) => {
-          const key = row.order_id;
-          const qty = Number(row.quantity || 0);
-          itemCountMap.set(key, (itemCountMap.get(key) || 0) + qty);
-        });
-
-        // latest payment method (current page only)
-        const { data: paymentsData, error: pErr } = await supabase
-          .from('payments')
-          .select('order_id, method, created_at')
-          .in('order_id', orderIds);
-
-        if (pErr) console.error('Admin orders: payments error', pErr);
-
-        const paymentMap = new Map<string, { method: string; created_at: string }>();
-        (paymentsData || []).forEach((p: any) => {
-          const key = p.order_id;
-          const existing = paymentMap.get(key);
-          if (!existing) {
-            paymentMap.set(key, { method: p.method || '—', created_at: p.created_at });
-            return;
-          }
-          if (new Date(p.created_at).getTime() > new Date(existing.created_at).getTime()) {
-            paymentMap.set(key, { method: p.method || '—', created_at: p.created_at });
-          }
-        });
-
-        // Active DTDC shipments for the current page so we can show
-        // AWB / "Needs shipment" inline.
-        const { data: shipmentsData, error: sErr } = await supabase
-          .from('dtdc_shipments')
-          .select('order_id, reference_number, status, is_active')
-          .in('order_id', orderIds)
-          .eq('is_active', true);
-
-        if (sErr) console.error('Admin orders: shipments error', sErr);
-
-        const shipmentMap = new Map<string, { awb: string | null; status: string | null }>();
-        (shipmentsData || []).forEach((row: any) => {
-          shipmentMap.set(row.order_id, {
-            awb: row.reference_number ?? null,
-            status: row.status ?? null,
-          });
-        });
-
-        let enriched: AdminOrderRow[] = rawOrders.map((o: any) => {
-          const snap = safeParseSnapshot(o.address_snapshot);
-          const ship = shipmentMap.get(o.id);
-
-          return {
-            id: o.id,
-            order_number: o.order_number ?? null,
-            status: o.status,
-            total: Number(o.total || 0),
-            currency: o.currency ?? 'INR',
-            created_at: o.created_at,
-            customerName: snap?.name || 'Guest',
-            customerEmail: snap?.email || '—',
-            itemCount: itemCountMap.get(o.id) || 0,
-            paymentMethod: paymentMap.get(o.id)?.method || '—',
-            shipmentAwb: ship?.awb ?? null,
-            shipmentStatus: ship?.status ?? null,
-          };
-        });
-
-        // For the awaiting-shipment filter, drop rows that already
-        // have an active shipment. Pagination counts include those
-        // rows, but the table reflects only what still needs work.
-        if (filterMode === 'awaiting_shipment') {
-          enriched = enriched.filter((o) => !o.shipmentAwb);
-        }
-
-        setOrders(enriched);
+        setTotalCount(payload.totalCount ?? 0);
+        setOrders((payload.rows ?? []) as AdminOrderRow[]);
       } catch (err: any) {
         console.error('Admin orders: load error', err);
         toast.error(err?.message || 'Failed to load orders');
@@ -272,7 +158,7 @@ export default function AdminOrdersPage() {
     return () => {
       cancelled = true;
     };
-  }, [user, isAdmin, from, to, searchQuery, filterMode]);
+  }, [user, isAdmin, page, searchQuery, filterMode]);
 
   // Client-side search for name/email/id (works even if address_snapshot is string)
   const visibleOrders = useMemo(() => {

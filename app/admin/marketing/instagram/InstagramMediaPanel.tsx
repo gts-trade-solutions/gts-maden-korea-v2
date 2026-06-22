@@ -224,17 +224,15 @@ const nextScheduledTimeRef = useRef<number | null>(null);
       setScheduledLoading(true);
       setScheduledError(null);
 
-      const { data, error } = await supabase
-        .from("social_scheduled_posts")
-        .select(
-          "id, platform, message, media_url, media_type, scheduled_at, status, last_error, error_message, ig_media_id, posted_at, created_at, payload"
-        )
-        .eq("platform", "instagram")
-        .eq("status", "pending")
-        .order("scheduled_at", { ascending: true });
-
-      if (error) throw error;
-      setScheduled((data || []) as ScheduledPost[]);
+      const res = await fetch(
+        "/api/admin/scheduled-posts?platform=instagram&status=pending",
+        { credentials: "include", cache: "no-store" }
+      );
+      const payload = await res.json().catch(() => ({} as any));
+      if (!res.ok || !payload?.ok) {
+        throw new Error(payload?.error || "Failed to load scheduled posts");
+      }
+      setScheduled((payload.data || []) as ScheduledPost[]);
     } catch (e: any) {
       console.error("loadScheduledPosts error", e);
       setScheduledError(
