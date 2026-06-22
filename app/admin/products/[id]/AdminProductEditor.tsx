@@ -187,23 +187,21 @@ export function AdminProductEditor({ productId }: { productId: string }) {
     let cancelled = false;
     (async () => {
       // (optional) check admin role via RLS/rpc here if you have it
-      const [{ data: prod, error: pErr }, { data: imgs }, { data: br }, { data: cat }] = await Promise.all([
-        supabase.from("products").select("*").eq("id", productId).maybeSingle(),
-        supabase.from("product_images").select("id,storage_path,alt,sort_order").eq("product_id", productId).order("sort_order", { ascending: true }),
-        supabase.from("brands").select("id,name,slug").order("name", { ascending: true }),
-        supabase.from("categories").select("id,name,slug").order("name", { ascending: true }),
-      ]);
+      // Load via the admin service-role endpoint (MySQL) so HIDDEN products load
+      // too — the browser anon client is RLS-blocked for unpublished rows under
+      // NextAuth, which surfaced as a false "Product not found".
+      const res = await fetch(`/api/admin/catalog/products?id=${encodeURIComponent(productId)}`, { credentials: "include" });
+      const payload = await res.json().catch(() => ({} as any));
       if (cancelled) return;
-      if (pErr) { toast.error(pErr.message); return; }
-      if (!prod) { toast.error("Product not found"); router.replace("/admin/products"); return; }
-
-      setBrands((br ?? []) as BrandRow[]);
-      setCategories((cat ?? []) as CategoryRow[]);
-
-      if (prod.vendor_id) {
-        const { data: v } = await supabase.from("vendors").select("id,display_name").eq("id", prod.vendor_id).maybeSingle();
-        if (!cancelled) setVendor(v ?? null);
+      if (!res.ok || !payload?.ok || !payload?.product) {
+        if (res.status === 404 || payload?.error === "NOT_FOUND") { toast.error("Product not found"); router.replace("/admin/products"); return; }
+        toast.error(payload?.error || "Failed to load product"); return;
       }
+      const prod = payload.product as any;
+      const imgs = (payload.images ?? []) as any[];
+      setBrands((payload.brands ?? []) as BrandRow[]);
+      setCategories((payload.categories ?? []) as CategoryRow[]);
+      setVendor((payload.vendor ?? null) as any);
 
       const m: Model = {
         id: prod.id,

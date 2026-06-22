@@ -27,7 +27,24 @@ function admin() {
 export async function GET(req: Request) {
   const { error } = await requireAdmin(req);
   if (error) return error;
+  const id = new URL(req.url).searchParams.get("id");
   try {
+    // Single product (full row) for the admin editor. Read from MySQL so HIDDEN
+    // (is_published=false) products load too — the browser anon Supabase client
+    // is RLS-blocked for unpublished rows under NextAuth (false "Product not found").
+    if (id) {
+      const [product, sImages, sBrands, sCategories] = await Promise.all([
+        prisma.products.findUnique({ where: { id } }),
+        prisma.product_images.findMany({ where: { product_id: id }, select: { id: true, storage_path: true, alt: true, sort_order: true }, orderBy: { sort_order: "asc" } }),
+        prisma.brands.findMany({ select: { id: true, name: true, slug: true }, orderBy: { name: "asc" } }),
+        prisma.categories.findMany({ select: { id: true, name: true, slug: true }, orderBy: { name: "asc" } }),
+      ]);
+      if (!product) return json({ ok: false, error: "NOT_FOUND" }, 404);
+      const vendor = product.vendor_id
+        ? await prisma.vendors.findUnique({ where: { id: product.vendor_id }, select: { id: true, display_name: true } })
+        : null;
+      return json({ ok: true, product: jsonSafe(product), images: jsonSafe(sImages), brands: jsonSafe(sBrands), categories: jsonSafe(sCategories), vendor: jsonSafe(vendor) });
+    }
     const [products, brands, categories, vendors] = await Promise.all([
       prisma.products.findMany({
         select: {
