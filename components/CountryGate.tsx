@@ -50,6 +50,19 @@ export function CountryGate() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Loop-breaker: once the user explicitly picks a country via this modal in
+  // this browser, never re-block them — even if a profile read-back lags or a
+  // dual-write to one store missed (the cause of the "modal keeps coming back"
+  // report). The profile still persists the choice for cross-device restore;
+  // this is purely a client-side safety net. Geo-detected cookies do NOT set
+  // this flag, so genuine first-time visitors are still gated.
+  const [chose, setChose] = useState(false);
+  useEffect(() => {
+    if (typeof window !== "undefined" && localStorage.getItem("mik_country_chosen")) {
+      setChose(true);
+    }
+  }, []);
+
   // Re-sync the dropdown when the user's cookie value changes between
   // mounts (e.g. middleware updated it from geo on first visit). The
   // user can still pick anything; this just primes the default to the
@@ -65,7 +78,7 @@ export function CountryGate() {
     [pathname]
   );
 
-  if (!needsCountrySelection || isOnSkipPath) return null;
+  if (!needsCountrySelection || isOnSkipPath || chose) return null;
 
   const submit = async () => {
     if (!isSupportedCountry(country)) {
@@ -103,7 +116,11 @@ export function CountryGate() {
       // the next navigation. A full reload picks them up immediately so
       // banners, prices, K-Partnership offers, etc. all reflect the
       // chosen country without the user having to navigate around.
+      setChose(true);
       if (typeof window !== "undefined") {
+        try {
+          localStorage.setItem("mik_country_chosen", country);
+        } catch {}
         window.location.reload();
       }
     } catch (e: any) {
@@ -118,7 +135,8 @@ export function CountryGate() {
       role="dialog"
       aria-modal="true"
       aria-labelledby="country-gate-title"
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+      translate="no"
+      className="notranslate fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
     >
       <div className="w-full max-w-md rounded-2xl bg-background shadow-2xl">
         <div className="p-5 sm:p-6 space-y-4">

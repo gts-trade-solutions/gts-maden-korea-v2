@@ -104,8 +104,9 @@ export function CountrySwitcher() {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
+        translate="no"
         className="
-          inline-flex items-center gap-1.5 rounded-md px-2 py-1.5
+          notranslate inline-flex items-center gap-1.5 rounded-md px-2 py-1.5
           text-sm font-medium text-foreground hover:bg-accent
           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring
         "
@@ -116,7 +117,7 @@ export function CountrySwitcher() {
         <ChevronDown className="h-3.5 w-3.5 opacity-60" aria-hidden />
       </PopoverTrigger>
 
-      <PopoverContent align="end" className="w-72 p-0 overflow-hidden">
+      <PopoverContent align="end" translate="no" className="notranslate w-72 p-0 overflow-hidden">
         <div className="flex border-b text-xs">
           {(["country", "language", "currency"] as Section[]).map((s) => (
             <button

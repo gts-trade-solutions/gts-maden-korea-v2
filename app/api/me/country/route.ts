@@ -68,11 +68,20 @@ export async function POST(req: NextRequest) {
   if (upErr) return json({ ok: false, error: upErr.message }, 500);
 
   // Dual-write to MySQL profiles (the NextAuth profile path reads MySQL).
+  // Use upsert, not update: a plain update THROWS (P2025) when the user has no
+  // MySQL profiles row yet (mid-migration / OAuth user not yet mirrored). That
+  // throw was swallowed below, so the country never persisted on the MySQL read
+  // path and <CountryGate> re-blocked the user forever. Create defaults role to
+  // "customer" (DB default) — only ever hit when the row is genuinely missing.
   try {
     const { prisma } = await import("@/lib/db/prisma");
-    await prisma.profiles.update({ where: { id: userId }, data: { preferred_country: country } });
+    await prisma.profiles.upsert({
+      where: { id: userId },
+      update: { preferred_country: country },
+      create: { id: userId, preferred_country: country },
+    });
   } catch (e) {
-    console.error("[dual-write] me/country MySQL update failed:", e);
+    console.error("[dual-write] me/country MySQL upsert failed:", e);
   }
 
   // Build the response and set the cookies. `mik_country` always
