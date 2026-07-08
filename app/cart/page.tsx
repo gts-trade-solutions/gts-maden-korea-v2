@@ -28,21 +28,9 @@ import {
   type MembershipRow,
 } from "@/lib/membership";
 import { useShippingConfig } from "@/lib/hooks/useShippingConfig";
-import { supabase } from "@/lib/supabaseClient";
 import { resolveMediaUrl } from "@/lib/storage/backend";
 import { toast } from "sonner";
 import Image from "next/image";
-import { fetchCountryOffers } from "@/lib/pricing";
-import { isSupportedCountry, DEFAULT_COUNTRY } from "@/lib/countries";
-
-function readCountryFromCookie(): string {
-  if (typeof document === "undefined") return DEFAULT_COUNTRY;
-  const match = document.cookie
-    .split("; ")
-    .find((row) => row.startsWith("mik_country="));
-  const raw = match ? decodeURIComponent(match.split("=")[1] ?? "") : "";
-  return isSupportedCountry(raw) ? raw : DEFAULT_COUNTRY;
-}
 
 type ProductRow = {
   id: string;
@@ -264,38 +252,30 @@ export default function CartPage() {
     }
 
     (async () => {
-      const [{ data, error }, offers] = await Promise.all([
-        supabase
-          .from("products")
-          .select(
-            `
-            id, slug, name, price, currency,
-            is_published,
-            compare_at_price, sale_price, sale_starts_at, sale_ends_at,
-            hero_image_path, brands(name)
-          `,
-          )
-          .in("id", ids),
-        fetchCountryOffers(ids, readCountryFromCookie(), supabase),
-      ]);
+      // Line-item products + country offers from MySQL (/api/catalog/cart-products).
+      // The route reads the visitor country from the mik_country cookie.
+      try {
+        const res = await fetch(
+          `/api/catalog/cart-products?ids=${encodeURIComponent(ids.join(","))}`,
+          { cache: "no-store" },
+        );
+        const { products: data, offers } = await res.json();
 
-      if (error) {
-        console.error(error);
+        const map: Record<string, ProductRow> = {};
+        (data ?? []).forEach((p: any) => {
+          map[p.id] = {
+            ...p,
+            hero_image_url: storagePublicUrl(p.hero_image_path),
+          };
+        });
+
+        setGuestProducts(map);
+        setCartCountryOffers(offers ?? {});
+      } catch (e) {
+        console.error(e);
         setGuestProducts({});
         setCartCountryOffers({});
-        return;
       }
-
-      const map: Record<string, ProductRow> = {};
-      (data ?? []).forEach((p: any) => {
-        map[p.id] = {
-          ...p,
-          hero_image_url: storagePublicUrl(p.hero_image_path),
-        };
-      });
-
-      setGuestProducts(map);
-      setCartCountryOffers(offers);
     })();
   }, [cartReady, items]);
 

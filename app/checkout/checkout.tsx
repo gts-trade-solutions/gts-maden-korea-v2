@@ -17,9 +17,6 @@ import { useCountry } from "@/lib/contexts/CountryContext";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { COUNTRY_PROFILES } from "@/lib/countries";
 import { toast } from "sonner";
-// supabase (anon) is still used for PUBLIC reads only (published products) — those
-// work under both backends. All user-scoped reads/writes go through API routes.
-import { supabase } from "@/lib/supabaseClient";
 import { useRazorpayCheckout } from "@/lib/hooks/useRazorpayCheckout";
 import {
   computeShippingFee,
@@ -267,32 +264,28 @@ export default function CheckoutPage() {
 
       const ids = Array.from(new Set(items.map((i) => i.product_id)));
 
-      const { data, error } = await supabase
-        .from("products")
-        .select(
-          `
-          id, slug, name,
-          price, currency,
-          compare_at_price, sale_price, sale_starts_at, sale_ends_at,
-          hero_image_path,
-          brands ( name )
-        `
-        )
-        .in("id", ids)
-        .eq("is_published", true);
+      // Order-summary products from MySQL (/api/catalog/cart-products). Pricing
+      // is still server-authoritative via /api/checkout/calc-totals; this is
+      // display only. published=1 drops any unpublished line items.
+      try {
+        const res = await fetch(
+          `/api/catalog/cart-products?ids=${encodeURIComponent(ids.join(","))}&published=1`,
+          { cache: "no-store" },
+        );
+        const { products: data } = await res.json();
 
-      if (cancelled) return;
+        if (cancelled) return;
 
-      if (error) {
-        console.error("Load products @ checkout:", error);
-        toast.error(t("errLoadProducts"));
-        setDbProducts({});
-      } else {
         const map: Record<string, DbProduct> = {};
-        (data ?? []).forEach((p) => {
+        (data ?? []).forEach((p: any) => {
           map[p.id] = p as DbProduct;
         });
         setDbProducts(map);
+      } catch (err) {
+        if (cancelled) return;
+        console.error("Load products @ checkout:", err);
+        toast.error(t("errLoadProducts"));
+        setDbProducts({});
       }
 
       setLoadingProducts(false);
