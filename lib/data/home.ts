@@ -83,7 +83,12 @@ export async function getInfluencerVideosLiveMysql(pageScope: string, limit: num
   });
   const shaped = videos.map((v) => {
     const { home_influencer_video_products, ...rest } = v as any;
-    return { ...rest, attached: home_influencer_video_products };
+    return {
+      ...rest,
+      video_url: rest.video_url ? supabaseUrlToCdn(rest.video_url) : rest.video_url,
+      thumbnail_url: rest.thumbnail_url ? supabaseUrlToCdn(rest.thumbnail_url) : rest.thumbnail_url,
+      attached: home_influencer_video_products,
+    };
   });
   return jsonSafe(shaped) as any[];
 }
