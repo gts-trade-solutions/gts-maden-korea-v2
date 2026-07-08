@@ -16,26 +16,44 @@ export async function getCheckoutProductsMysql(productIds: string[]) {
   return jsonSafe(rows) as any[];
 }
 
-// Mirrors get_promo_details: active promo within its validity window.
+// Mirrors the Supabase RPC public.get_promo_details(p_code) exactly:
+//   where upper(trim(code)) = upper(trim(p_code))
+//     and coalesce(active,false) = true
+//     and (starts_at is null or starts_at <= now())
+//     and (expires_at is null or expires_at >= now())   -- inclusive
+//     and (max_uses is null or coalesce(uses,0) < max_uses)
+//   scope := case when product_id is null then 'global' else 'product' end
+// Returns { id, code, influencer_id, product_id, scope, discount_percent,
+//           user_discount_percent (= discount_percent), commission_percent }.
 export async function getPromoDetailsMysql(code: string) {
   const now = new Date();
   const pc = await prisma.promo_codes.findFirst({
     where: {
-      code: code.toUpperCase(),
+      code: code.toUpperCase().trim(),
       active: true,
       AND: [
         { OR: [{ starts_at: null }, { starts_at: { lte: now } }] },
-        { OR: [{ expires_at: null }, { expires_at: { gt: now } }] },
+        { OR: [{ expires_at: null }, { expires_at: { gte: now } }] },
       ],
     },
     select: {
-      id: true, code: true, scope: true, influencer_id: true, product_id: true,
+      id: true, code: true, influencer_id: true, product_id: true,
       discount_percent: true, commission_percent: true,
+      max_uses: true, uses: true,
     },
   });
   if (!pc) return null;
+  // max_uses guard: Prisma cannot compare two columns in `where`, so the
+  // RPC's `coalesce(uses,0) < max_uses` clause is enforced here.
+  if (pc.max_uses != null && (pc.uses ?? 0) >= pc.max_uses) return null;
   return jsonSafe({
-    ...pc,
+    id: pc.id,
+    code: pc.code,
+    influencer_id: pc.influencer_id,
+    product_id: pc.product_id,
+    // scope is derived from product_id (mirrors the RPC), not the column.
+    scope: pc.product_id == null ? "global" : "product",
+    discount_percent: pc.discount_percent,
     user_discount_percent: pc.discount_percent,
     commission_percent: pc.commission_percent,
   });

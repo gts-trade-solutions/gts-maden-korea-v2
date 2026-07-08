@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { createAdminClient } from "@/lib/supabaseAdmin";
-import { getRouteUser } from "@/lib/auth/routeUser";
+import { getSessionUserId } from "@/lib/auth/session";
 import { getPromoCodeFromCookie } from "@/lib/promo-cookie";
 import {
   roundMoney,
@@ -17,7 +16,14 @@ import {
   computeIntlShippingInr,
 } from "@/lib/internationalShipping";
 import { isSupportedCountry, DEFAULT_COUNTRY } from "@/lib/countries";
-import { fetchCountryOffers, effectivePriceForCountry } from "@/lib/pricing";
+import { effectivePriceForCountry } from "@/lib/pricing";
+import { fetchCountryOffersMysql } from "@/lib/data/catalog";
+import {
+  getCheckoutProductsMysql,
+  getPromoDetailsMysql,
+  getInfluencerCapMysql,
+  getActiveMembershipMysql,
+} from "@/lib/data/checkout";
 
 type LineInput = { product_id: string; qty: number };
 
@@ -60,29 +66,11 @@ const lines: LineInput[] = Array.isArray(body?.lines) ? body.lines : [];
     );
   }
 
-  const sb = createAdminClient();
-  const useMysql = process.env.CATALOG_BACKEND === "mysql";
-
-  const userId = (await getRouteUser(req))?.id ?? null;
+  const userId = await getSessionUserId();
 
   const productIds = Array.from(new Set(lines.map((l) => l.product_id)));
 
-  let products: any[];
-  if (useMysql) {
-    const { getCheckoutProductsMysql } = await import("@/lib/data/checkout");
-    products = await getCheckoutProductsMysql(productIds);
-  } else {
-    const { data, error: pErr } = await sb
-      .from("products")
-      .select(
-        "id,name,price,currency,is_published,promo_exempt,sale_price,sale_starts_at,sale_ends_at,stock_qty,net_weight_g,gross_weight_g"
-      )
-      .in("id", productIds);
-    if (pErr) {
-      return NextResponse.json({ ok: false, error: pErr.message }, { status: 500 });
-    }
-    products = data ?? [];
-  }
+  const products: any[] = await getCheckoutProductsMysql(productIds);
 
   const prodMap = new Map((products as any[]).map((p: any) => [p.id, p]));
 
@@ -140,26 +128,14 @@ const lines: LineInput[] = Array.isArray(body?.lines) ? body.lines : [];
   // this country) means the resolver falls through to legacy
   // sale_price/price for each line — identical behavior to before
   // country offers existed.
-  const countryOffers = useMysql
-    ? await (await import("@/lib/data/catalog")).fetchCountryOffersMysql(productIds, country)
-    : await fetchCountryOffers(productIds, country, sb);
+  const countryOffers = await fetchCountryOffersMysql(productIds, country);
 
   const code = getPromoCodeFromCookie();
   let promo: any = null;
   let influencerCap: number | null = null;
 
   if (code) {
-    let row: any = null;
-    if (useMysql) {
-      const { getPromoDetailsMysql } = await import("@/lib/data/checkout");
-      row = await getPromoDetailsMysql(code);
-    } else {
-      const { data: pd, error: perr } = await sb.rpc("get_promo_details", { p_code: code });
-      if (perr) {
-        return NextResponse.json({ ok: false, error: perr.message }, { status: 500 });
-      }
-      row = (Array.isArray(pd) ? pd[0] : pd) as any;
-    }
+    const row: any = await getPromoDetailsMysql(code);
 
     if (row) {
       promo = {
@@ -182,15 +158,7 @@ const lines: LineInput[] = Array.isArray(body?.lines) ? body.lines : [];
       // silently drop the promo so we don't charge a bogus discount.
       // The cart still renders successfully — just without the promo.
       if (promo.influencer_id) {
-        const prof = useMysql
-          ? await (await import("@/lib/data/checkout")).getInfluencerCapMysql(promo.influencer_id)
-          : (
-              await sb
-                .from("influencer_profiles")
-                .select("commission_cap_pct, applicable_countries")
-                .eq("user_id", promo.influencer_id)
-                .maybeSingle()
-            ).data;
+        const prof = await getInfluencerCapMysql(promo.influencer_id);
         if (prof && prof.commission_cap_pct != null) {
           influencerCap = Number(prof.commission_cap_pct);
         }
@@ -263,21 +231,7 @@ const lines: LineInput[] = Array.isArray(body?.lines) ? body.lines : [];
   let activeMembership: { status: string; ends_at: string } | null = null;
 
   if (userId) {
-    if (useMysql) {
-      const { getActiveMembershipMysql } = await import("@/lib/data/checkout");
-      activeMembership = (await getActiveMembershipMysql(userId)) as any;
-    } else {
-      const { data: membership } = await sb
-        .from("user_memberships")
-        .select("status, ends_at")
-        .eq("user_id", userId)
-        .eq("status", "active")
-        .gt("ends_at", new Date().toISOString())
-        .order("ends_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      activeMembership = membership ?? null;
-    }
+    activeMembership = (await getActiveMembershipMysql(userId)) as any;
   }
 
   // ─── International vs Indian shipping branch ────────────────────

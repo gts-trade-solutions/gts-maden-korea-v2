@@ -1,15 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getRouteUser } from "@/lib/auth/routeUser";
-import { createClient } from "@supabase/supabase-js";
-
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+import { getSessionUserId } from "@/lib/auth/session";
+import { prisma } from "@/lib/db/prisma";
 
 export async function POST(req: NextRequest) {
   try {
-    const userId = (await getRouteUser(req))?.id ?? null;
+    const userId = await getSessionUserId();
 
     if (!userId) {
       return NextResponse.json(
@@ -18,21 +13,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const nowIso = new Date().toISOString();
+    const now = new Date();
 
-    const { data: expiredRows, error: fetchError } = await supabaseAdmin
-      .from("user_memberships")
-      .select("id")
-      .eq("user_id", userId)
-      .eq("status", "active")
-      .lte("ends_at", nowIso);
-
-    if (fetchError) {
-      return NextResponse.json(
-        { ok: false, error: fetchError.message },
-        { status: 500 }
-      );
-    }
+    const expiredRows = await prisma.user_memberships.findMany({
+      where: { user_id: userId, status: "active", ends_at: { lte: now } },
+      select: { id: true },
+    });
 
     if (!expiredRows || expiredRows.length === 0) {
       return NextResponse.json({
@@ -43,26 +29,10 @@ export async function POST(req: NextRequest) {
 
     const ids = expiredRows.map((row) => row.id);
 
-    const { error: updateError } = await supabaseAdmin
-      .from("user_memberships")
-      .update({ status: "expired" })
-      .in("id", ids);
-
-    if (updateError) {
-      return NextResponse.json(
-        { ok: false, error: updateError.message },
-        { status: 500 }
-      );
-    }
-
-    // Mirror the active→expired flip into MySQL so the cart/checkout membership
-    // read stops granting free shipping once a membership lapses. Best-effort.
-    try {
-      const { mirrorMembershipsIntoMysql } = await import("@/lib/data/membership");
-      await mirrorMembershipsIntoMysql(supabaseAdmin, userId);
-    } catch (e) {
-      console.error("[dual-write] membership sync-status MySQL mirror failed:", e);
-    }
+    await prisma.user_memberships.updateMany({
+      where: { id: { in: ids } },
+      data: { status: "expired", updated_at: new Date() },
+    });
 
     return NextResponse.json({
       ok: true,

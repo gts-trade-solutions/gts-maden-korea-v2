@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { getRouteUser } from "@/lib/auth/routeUser";
-import { createServiceClient } from "@/lib/supabaseServer";
+import { getSessionUserId } from "@/lib/auth/session";
+import { prisma } from "@/lib/db/prisma";
 import { isSupportedCountry } from "@/lib/countries";
 import { requireEmailVerified } from "@/lib/auth/emailVerification";
 import { randomUUID } from "node:crypto";
@@ -19,9 +19,7 @@ const ELIGIBLE_ORDER_STATUSES = [
 
 export async function POST(req: NextRequest) {
   try {
-    const admin = createServiceClient();
-
-    const userId = (await getRouteUser(req))?.id;
+    const userId = await getSessionUserId();
     if (!userId) {
       return NextResponse.json(
         { ok: false, error: "UNAUTHORIZED" },
@@ -64,36 +62,18 @@ export async function POST(req: NextRequest) {
     // the second query if the user has zero eligible orders at all.
     let isVerifiedPurchase = false;
 
-    const { data: orders, error: orderErr } = await admin
-      .from("orders")
-      .select("id")
-      .eq("user_id", userId)
-      .in("status", ELIGIBLE_ORDER_STATUSES);
+    const orders = await prisma.orders.findMany({
+      where: { user_id: userId, status: { in: ELIGIBLE_ORDER_STATUSES } },
+      select: { id: true },
+    });
 
-    if (orderErr) {
-      return NextResponse.json(
-        { ok: false, error: orderErr.message },
-        { status: 500 }
-      );
-    }
-
-    const orderIds = (orders ?? []).map((o: any) => o.id);
+    const orderIds = orders.map((o) => o.id);
     if (orderIds.length > 0) {
-      const { data: purchased, error: purchaseErr } = await admin
-        .from("order_items")
-        .select("order_id")
-        .eq("product_id", productId)
-        .in("order_id", orderIds)
-        .limit(1);
-
-      if (purchaseErr) {
-        return NextResponse.json(
-          { ok: false, error: purchaseErr.message },
-          { status: 500 }
-        );
-      }
-
-      isVerifiedPurchase = !!(purchased && purchased.length > 0);
+      const purchased = await prisma.order_items.findFirst({
+        where: { product_id: productId, order_id: { in: orderIds } },
+        select: { order_id: true },
+      });
+      isVerifiedPurchase = !!purchased;
     }
 
     // Snapshot the reviewer's country onto the row so the storefront
@@ -103,11 +83,10 @@ export async function POST(req: NextRequest) {
     // (the explicit user choice) → mik_country cookie (the geo/visitor
     // signal) → null (we leave it for backfill rather than guessing).
     let reviewerCountry: string | null = null;
-    const { data: profileRow } = await admin
-      .from("profiles")
-      .select("preferred_country")
-      .eq("id", userId)
-      .maybeSingle<{ preferred_country: string | null }>();
+    const profileRow = await prisma.profiles.findUnique({
+      where: { id: userId },
+      select: { preferred_country: true },
+    });
     if (profileRow?.preferred_country && isSupportedCountry(profileRow.preferred_country)) {
       reviewerCountry = profileRow.preferred_country;
     } else {
@@ -118,47 +97,34 @@ export async function POST(req: NextRequest) {
     }
 
     const reviewId = randomUUID();
-    const { error: insertErr } = await admin.from("product_reviews").insert({
-      id: reviewId,
-      product_id: productId,
-      user_id: userId,
-      rating,
-      title,
-      body: bodyText,
-      photos,
-      is_verified_purchase: isVerifiedPurchase,
-      status: "pending",
-      display_name: displayName,
-      avatar_url: avatarUrl,
-      country: reviewerCountry,
-    });
-
-    if (insertErr) {
-      if ((insertErr as any).code === "23505") {
+    try {
+      await prisma.product_reviews.create({
+        data: {
+          id: reviewId,
+          product_id: productId,
+          user_id: userId,
+          rating,
+          title,
+          body: bodyText,
+          photos,
+          is_verified_purchase: isVerifiedPurchase,
+          status: "pending",
+          display_name: displayName,
+          avatar_url: avatarUrl,
+          country: reviewerCountry,
+        },
+      });
+    } catch (insertErr: any) {
+      if (insertErr?.code === "P2002") {
         return NextResponse.json(
           { ok: false, error: "ALREADY_REVIEWED" },
           { status: 409 }
         );
       }
       return NextResponse.json(
-        { ok: false, error: insertErr.message },
+        { ok: false, error: insertErr?.message || "REVIEW_CREATE_FAILED" },
         { status: 500 }
       );
-    }
-
-    // Dual-write to MySQL with the same id. New reviews are 'pending' (not in
-    // the published list yet), so this just keeps MySQL ready for publish.
-    try {
-      const { prisma } = await import("@/lib/db/prisma");
-      await prisma.product_reviews.create({
-        data: {
-          id: reviewId, product_id: productId, user_id: userId, rating,
-          title, body: bodyText, photos, is_verified_purchase: isVerifiedPurchase,
-          status: "pending", display_name: displayName, avatar_url: avatarUrl, country: reviewerCountry,
-        },
-      });
-    } catch (e) {
-      console.error("[dual-write] review create MySQL failed:", e);
     }
 
     return NextResponse.json({ ok: true });

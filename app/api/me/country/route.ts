@@ -3,8 +3,8 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { createClient } from "@supabase/supabase-js";
-import { getRouteUser } from "@/lib/auth/routeUser";
+import { getSessionUserId } from "@/lib/auth/session";
+import { prisma } from "@/lib/db/prisma";
 import {
   isSupportedCountry,
   COUNTRY_PROFILES,
@@ -44,44 +44,26 @@ export async function POST(req: NextRequest) {
   }
   const country = raw as CountryCode;
 
-  // Authenticate the caller via Supabase cookies (preferred) OR a
-  // Bearer token (newly-registered users whose cookies haven't been
-  // attached yet via /api/auth/attach). Either path resolves to a
-  // user id; if neither works, 401.
+  // Authenticate the caller via the NextAuth session; if absent, 401.
   const cookieStore = cookies();
-  const userId = (await getRouteUser(req))?.id ?? null;
+  const userId = await getSessionUserId();
   if (!userId) return json({ ok: false, error: "UNAUTH" }, 401);
 
-  // Service-role client for the profile write. RLS would allow the
-  // user to update their own row, but using service-role here keeps
-  // the path identical whether the caller authed via cookies or
-  // bearer, and avoids a separate Supabase client per branch.
-  const sbAdmin = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { persistSession: false, autoRefreshToken: false } }
-  );
-  const { error: upErr } = await sbAdmin
-    .from("profiles")
-    .update({ preferred_country: country, updated_at: new Date().toISOString() })
-    .eq("id", userId);
-  if (upErr) return json({ ok: false, error: upErr.message }, 500);
-
-  // Dual-write to MySQL profiles (the NextAuth profile path reads MySQL).
+  // Persist to MySQL profiles (the NextAuth profile path reads MySQL).
   // Use upsert, not update: a plain update THROWS (P2025) when the user has no
-  // MySQL profiles row yet (mid-migration / OAuth user not yet mirrored). That
-  // throw was swallowed below, so the country never persisted on the MySQL read
-  // path and <CountryGate> re-blocked the user forever. Create defaults role to
-  // "customer" (DB default) — only ever hit when the row is genuinely missing.
+  // MySQL profiles row yet (mid-migration / OAuth user not yet mirrored), which
+  // would leave the country unpersisted on the read path and re-block the user
+  // in <CountryGate>. Create defaults role to "customer" (DB default) — only
+  // ever hit when the row is genuinely missing.
   try {
-    const { prisma } = await import("@/lib/db/prisma");
     await prisma.profiles.upsert({
       where: { id: userId },
-      update: { preferred_country: country },
+      update: { preferred_country: country, updated_at: new Date() },
       create: { id: userId, preferred_country: country },
     });
   } catch (e) {
-    console.error("[dual-write] me/country MySQL upsert failed:", e);
+    console.error("[me/country] MySQL upsert failed:", e);
+    return json({ ok: false, error: (e as any)?.message ?? "DB_ERROR" }, 500);
   }
 
   // Build the response and set the cookies. `mik_country` always

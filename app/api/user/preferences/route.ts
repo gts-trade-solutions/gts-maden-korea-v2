@@ -11,8 +11,8 @@
 // natural default currency.
 
 import { NextResponse } from "next/server";
-import { getRouteUser } from "@/lib/auth/routeUser";
-import { createAdminClient } from "@/lib/supabaseAdmin";
+import { getSessionUserId } from "@/lib/auth/session";
+import { prisma } from "@/lib/db/prisma";
 import { isSupportedLocale } from "@/lib/locales";
 import { isSupportedCountry } from "@/lib/countries";
 
@@ -63,51 +63,40 @@ export async function POST(req: Request) {
     );
   }
 
-  const userId = (await getRouteUser(req))?.id ?? null;
+  const userId = await getSessionUserId();
   if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const admin = createAdminClient();
-  const { error } = await admin
-    .from("profiles")
-    .update(updates)
-    .eq("id", userId);
-
-  if (error) {
+  // Persist to MySQL profiles (read by the NextAuth profile path).
+  try {
+    await prisma.profiles.update({ where: { id: userId }, data: updates as any });
+  } catch (e: any) {
+    console.error("[preferences] MySQL update failed:", e);
     return NextResponse.json(
-      { error: error.message ?? "Failed to update preferences" },
+      { error: e?.message ?? "Failed to update preferences" },
       { status: 500 }
     );
-  }
-
-  // Dual-write to MySQL profiles (read by the NextAuth profile path).
-  try {
-    const { prisma } = await import("@/lib/db/prisma");
-    await prisma.profiles.update({ where: { id: userId }, data: updates });
-  } catch (e) {
-    console.error("[dual-write] preferences MySQL update failed:", e);
   }
 
   return NextResponse.json({ ok: true });
 }
 
 export async function GET() {
-  const userId = (await getRouteUser())?.id ?? null;
+  const userId = await getSessionUserId();
   if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const admin = createAdminClient();
-  const { data, error } = await admin
-    .from("profiles")
-    .select("preferred_locale, preferred_country")
-    .eq("id", userId)
-    .maybeSingle();
-
-  if (error) {
+  let data: { preferred_locale: string | null; preferred_country: string | null } | null;
+  try {
+    data = await prisma.profiles.findUnique({
+      where: { id: userId },
+      select: { preferred_locale: true, preferred_country: true },
+    });
+  } catch (e: any) {
     return NextResponse.json(
-      { error: error.message ?? "Failed to read preferences" },
+      { error: e?.message ?? "Failed to read preferences" },
       { status: 500 }
     );
   }

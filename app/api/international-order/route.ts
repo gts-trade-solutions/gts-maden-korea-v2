@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { createClient } from "@supabase/supabase-js";
-import { getRouteUser } from "@/lib/auth/routeUser";
+import { randomUUID } from "node:crypto";
+import { prisma } from "@/lib/db/prisma";
+import { getSessionUserId } from "@/lib/auth/session";
 import { sendEmail } from "@/lib/ses";
 import { getBusinessInfo } from "@/lib/businessInfo";
 import { FALLBACK_RATES, formatPrice, isSupportedCurrency } from "@/lib/currency";
@@ -21,11 +22,6 @@ import { createAdminNotification } from "@/lib/admin/notifications";
 // the request; anonymous visitors can submit too.
 
 export const dynamic = "force-dynamic";
-
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
 
 type CartLine = {
   product_id: string;
@@ -195,32 +191,33 @@ export async function POST(req: NextRequest) {
   // Link signed-in customer if present.
   let userId: string | null = null;
   try {
-    userId = (await getRouteUser(req))?.id ?? null;
+    userId = await getSessionUserId();
   } catch {
     // anonymous OK
   }
 
-  // Persist request. RLS allows anon INSERT.
-  const { data: inserted, error: insertError } = await supabaseAdmin
-    .from("international_orders")
-    .insert({
-      status: "new",
-      customer_name: body.customer_name,
-      customer_email: body.customer_email,
-      customer_phone: body.customer_phone ?? null,
-      country: body.country,
-      address: body.address,
-      cart_snapshot: body.cart,
-      currency_code: body.currency_code,
-      display_total: body.display_total,
-      inr_total: body.inr_total,
-      notes: body.notes ?? null,
-      user_id: userId,
-    })
-    .select("id")
-    .single();
-
-  if (insertError || !inserted) {
+  // Persist request.
+  let inserted: { id: string };
+  try {
+    inserted = await prisma.international_orders.create({
+      data: {
+        id: randomUUID(),
+        status: "new",
+        customer_name: body.customer_name,
+        customer_email: body.customer_email,
+        customer_phone: body.customer_phone ?? null,
+        country: body.country,
+        address: body.address,
+        cart_snapshot: body.cart,
+        currency_code: body.currency_code,
+        display_total: body.display_total,
+        inr_total: body.inr_total,
+        notes: body.notes ?? null,
+        user_id: userId,
+      },
+      select: { id: true },
+    });
+  } catch (insertError: any) {
     return NextResponse.json(
       { ok: false, error: insertError?.message ?? "insert_failed" },
       { status: 500 }
