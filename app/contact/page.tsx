@@ -20,7 +20,7 @@ import { toast } from "sonner";
 import {
   DEFAULT_BUSINESS_PROFILE,
   type BusinessProfile,
-} from "@/lib/businessInfo";
+} from "@/lib/businessInfo-shared";
 import { isSupportedCountry, DEFAULT_COUNTRY } from "@/lib/countries";
 
 // Read visitor country from the same `mik_country` cookie used elsewhere

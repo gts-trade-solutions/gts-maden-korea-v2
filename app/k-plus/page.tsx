@@ -21,7 +21,6 @@ import {
   MEMBERSHIP_PLAN_NAME,
   MEMBERSHIP_PRICE,
   MEMBERSHIP_DURATION_DAYS,
-  getActiveMembership,
   type MembershipRow,
 } from "@/lib/membership";
 import { useShippingConfig } from "@/lib/hooks/useShippingConfig";

@@ -24,7 +24,6 @@ import {
   computeShippingFee,
   shippingMessage,
   hasActiveMembership,
-  getActiveMembership,
   type MembershipRow,
 } from "@/lib/membership";
 import { useShippingConfig } from "@/lib/hooks/useShippingConfig";

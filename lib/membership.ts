@@ -92,33 +92,8 @@ export async function syncMembershipStatus(userId: string) {
   return data;
 }
 
-export async function getActiveMembership(userId: string) {
-  await syncMembershipStatus(userId);
-
-  // Prisma is server-only; import dynamically so this module stays safe to
-  // import from client components (which use the shipping helpers above).
-  const { prisma } = await import("@/lib/db/prisma");
-  const { jsonSafe } = await import("@/lib/db/serialize");
-
-  const data = await prisma.user_memberships.findFirst({
-    where: {
-      user_id: userId,
-      status: "active",
-      ends_at: { gt: new Date() },
-    },
-    orderBy: { ends_at: "desc" },
-    select: {
-      id: true,
-      user_id: true,
-      plan_code: true,
-      plan_name: true,
-      amount: true,
-      duration_days: true,
-      status: true,
-      starts_at: true,
-      ends_at: true,
-    },
-  });
-
-  return data ? (jsonSafe(data) as MembershipRow) : null;
-}
+// NOTE: the active-membership DB read is server-only (Prisma) and lives in
+// lib/data/checkout.ts (`getActiveMembershipMysql`). Client components read it
+// via the /api/me/membership route. This module stays free of any Prisma /
+// server-only import so it remains safe to import from client components (which
+// use the shipping helpers + constants above).
