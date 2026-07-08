@@ -1,10 +1,9 @@
 // app/sitemap.ts
 import type { MetadataRoute } from 'next';
-import { createClient } from '@supabase/supabase-js';
+import { prisma } from '@/lib/db/prisma';
 import { resolveMediaUrl } from '@/lib/storage/backend';
 
 const SITE = (process.env.NEXT_PUBLIC_SITE_URL || 'https://madenkorea.com').replace(/\/$/, '');
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? '';
 
 // Rebuild at most once per hour
 export const revalidate = 60 * 60;
@@ -18,24 +17,34 @@ function publicProductMediaUrl(path: string | null | undefined): string | null {
 }
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const supabase = createClient(
-    SUPABASE_URL,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
-
-  const [{ data: products }, { data: categories }, { data: brands }] = await Promise.all([
-    supabase
-      .from('products')
-      .select('slug, hero_image_path, updated_at, created_at, is_published')
-      .eq('is_published', true),
-    supabase
-      .from('categories')
-      .select('slug, updated_at, created_at, is_visible')
-      .or('is_visible.is.null,is_visible.eq.true'),
-    supabase
-      .from('brands')
-      .select('slug, updated_at, created_at')
-      .order('name', { ascending: true }),
+  const [products, categories, brands] = await Promise.all([
+    prisma.products.findMany({
+      where: { is_published: true },
+      select: {
+        slug: true,
+        hero_image_path: true,
+        updated_at: true,
+        created_at: true,
+      },
+    }),
+    // The Supabase schema had an `is_visible` column filtered via
+    // `is_visible IS NULL OR is_visible = true`; the MySQL `categories`
+    // table has no such column, so all categories are visible.
+    prisma.categories.findMany({
+      select: {
+        slug: true,
+        updated_at: true,
+        created_at: true,
+      },
+    }),
+    prisma.brands.findMany({
+      select: {
+        slug: true,
+        updated_at: true,
+        created_at: true,
+      },
+      orderBy: { name: 'asc' },
+    }),
   ]);
 
   const now = new Date();

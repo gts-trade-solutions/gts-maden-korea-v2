@@ -2,8 +2,9 @@ export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
 import { headers } from "next/headers";
-import { createAdminClient } from "@/lib/supabaseAdmin";
-import { getRouteAuth } from "@/lib/auth/routeUser";
+import { randomUUID } from "node:crypto";
+import { prisma } from "@/lib/db/prisma";
+import { getSessionUserId } from "@/lib/auth/session";
 import { getVisitorIdentity } from "@/lib/analytics/identity";
 import { ipPrefix, parseDevice } from "@/lib/analytics/ip";
 import { isKnownEvent } from "@/lib/analytics/events";
@@ -52,14 +53,12 @@ export async function POST(req: Request) {
     let userId: string | null = null;
     let consent = true;
     try {
-      const { user, sb } = await getRouteAuth(req);
-      userId = user?.id ?? null;
+      userId = await getSessionUserId();
       if (userId) {
-        const { data: prof } = await sb
-          .from("profiles")
-          .select("tracking_consent")
-          .eq("id", userId)
-          .maybeSingle();
+        const prof = await prisma.profiles.findUnique({
+          where: { id: userId },
+          select: { tracking_consent: true },
+        });
         if (prof && prof.tracking_consent === false) consent = false;
       }
     } catch {
@@ -71,27 +70,28 @@ export async function POST(req: Request) {
     const rows = incoming
       .filter((e) => isKnownEvent(e.event_name))
       .map((e) => ({
-        occurred_at: e.occurred_at || new Date().toISOString(),
+        id: randomUUID(),
+        occurred_at: e.occurred_at ? new Date(e.occurred_at) : new Date(),
         user_id: userId,
-        anon_id: anonId,
-        session_id: sessionId,
+        anon_id: anonId ?? "",
+        session_id: sessionId ?? "",
         event_name: e.event_name,
         path: e.path ?? null,
         referrer: e.referrer ?? null,
         user_agent: ua,
         ip_prefix,
-        utm: e.utm ?? null,
-        device,
+        utm: e.utm ?? undefined,
+        device: device ?? undefined,
         props: safeProps(e.props),
       }));
 
     if (!rows.length) return NextResponse.json({ ok: true, written: 0 });
 
-    const admin = createAdminClient();
-    const { error } = await admin.from("events").insert(rows);
-    if (error) {
-      console.warn("[events.track] insert failed:", error.message);
-      return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    try {
+      await prisma.events.createMany({ data: rows });
+    } catch (err: any) {
+      console.warn("[events.track] insert failed:", err?.message);
+      return NextResponse.json({ ok: false, error: err?.message }, { status: 500 });
     }
 
     return NextResponse.json({ ok: true, written: rows.length });

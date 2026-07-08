@@ -27,7 +27,7 @@
 //     (Meta accepts the same `g:` namespace tags Google uses)
 
 import { NextRequest, NextResponse } from "next/server";
-import { createServiceClient } from "@/lib/supabaseServer";
+import { prisma } from "@/lib/db/prisma";
 import { resolveMediaUrl } from "@/lib/storage/backend";
 
 export const runtime = "nodejs";
@@ -93,24 +93,41 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const sb = createServiceClient();
-
   // 1) Products — published, not bundle, not soft-deleted.
-  const { data: products, error: pErr } = await sb
-    .from("products")
-    .select(
-      "id, sku, slug, name, short_description, description, brand, brand_id, price, sale_price, sale_starts_at, sale_ends_at, compare_at_price, hero_image_path, stock_qty, track_inventory, gross_weight_g, category_id, is_bundle"
-    )
-    .eq("is_published", true)
-    .eq("is_bundle", false)
-    .is("deleted_at", null);
-
-  if (pErr) {
+  let productList: any[];
+  try {
+    productList = await prisma.products.findMany({
+      where: {
+        is_published: true,
+        is_bundle: false,
+        deleted_at: null,
+      },
+      select: {
+        id: true,
+        sku: true,
+        slug: true,
+        name: true,
+        short_description: true,
+        description: true,
+        brand: true,
+        brand_id: true,
+        price: true,
+        sale_price: true,
+        sale_starts_at: true,
+        sale_ends_at: true,
+        compare_at_price: true,
+        hero_image_path: true,
+        stock_qty: true,
+        track_inventory: true,
+        gross_weight_g: true,
+        category_id: true,
+        is_bundle: true,
+      },
+    });
+  } catch (pErr) {
     console.error("[feed/products.xml] products fetch failed:", pErr);
     return new NextResponse("Feed temporarily unavailable", { status: 500 });
   }
-
-  const productList = products ?? [];
 
   // 2) Brands map (FK preferred, products.brand text as fallback).
   const brandIds = Array.from(
@@ -118,11 +135,11 @@ export async function GET(req: NextRequest) {
   );
   let brandMap = new Map<string, string>();
   if (brandIds.length > 0) {
-    const { data: brands } = await sb
-      .from("brands")
-      .select("id, name")
-      .in("id", brandIds);
-    for (const b of brands ?? []) {
+    const brands = await prisma.brands.findMany({
+      where: { id: { in: brandIds } },
+      select: { id: true, name: true },
+    });
+    for (const b of brands) {
       brandMap.set(b.id as string, (b.name as string) ?? "");
     }
   }
@@ -133,11 +150,11 @@ export async function GET(req: NextRequest) {
   );
   let categoryMap = new Map<string, string>();
   if (categoryIds.length > 0) {
-    const { data: cats } = await sb
-      .from("categories")
-      .select("id, name")
-      .in("id", categoryIds);
-    for (const c of cats ?? []) {
+    const cats = await prisma.categories.findMany({
+      where: { id: { in: categoryIds } },
+      select: { id: true, name: true },
+    });
+    for (const c of cats) {
       categoryMap.set(c.id as string, (c.name as string) ?? "");
     }
   }
@@ -147,13 +164,15 @@ export async function GET(req: NextRequest) {
   // 4) Country offer prices for India.
   let offerMap = new Map<string, number>();
   if (productIds.length > 0) {
-    const { data: offers } = await sb
-      .from("product_country_prices")
-      .select("product_id, offer_price")
-      .in("product_id", productIds)
-      .eq("country_code", country)
-      .eq("is_active", true);
-    for (const o of offers ?? []) {
+    const offers = await prisma.product_country_prices.findMany({
+      where: {
+        product_id: { in: productIds },
+        country_code: country,
+        is_active: true,
+      },
+      select: { product_id: true, offer_price: true },
+    });
+    for (const o of offers) {
       const v = Number(o.offer_price);
       if (Number.isFinite(v) && v > 0)
         offerMap.set(o.product_id as string, v);
@@ -163,12 +182,12 @@ export async function GET(req: NextRequest) {
   // 5) Additional images (up to MAX_ADDITIONAL_IMAGES per product).
   let imgMap = new Map<string, string[]>();
   if (productIds.length > 0) {
-    const { data: imgs } = await sb
-      .from("product_images")
-      .select("product_id, storage_path, sort_order")
-      .in("product_id", productIds)
-      .order("sort_order", { ascending: true });
-    for (const img of imgs ?? []) {
+    const imgs = await prisma.product_images.findMany({
+      where: { product_id: { in: productIds } },
+      select: { product_id: true, storage_path: true, sort_order: true },
+      orderBy: { sort_order: "asc" },
+    });
+    for (const img of imgs) {
       const arr = imgMap.get(img.product_id as string) ?? [];
       if (arr.length < MAX_ADDITIONAL_IMAGES) {
         arr.push(img.storage_path as string);
