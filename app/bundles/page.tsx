@@ -11,6 +11,7 @@ import {
   PRODUCT_TRANSLATABLE_FIELDS,
 } from "@/lib/contentTranslations";
 import { isSupportedCountry, DEFAULT_COUNTRY } from "@/lib/countries";
+import { resolveMediaUrl } from "@/lib/storage/backend";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +31,11 @@ export default async function BundlesPage() {
     PRODUCT_TRANSLATABLE_FIELDS,
     "product_translations",
   ) as any[];
-  const products = await applyCountryOffers(translated, country);
+  const withImages = translated.map((p) => ({
+    ...p,
+    hero_image_url: resolveMediaUrl("product-media", p.hero_image_path) ?? undefined,
+  }));
+  const products = await applyCountryOffers(withImages, country);
 
   return (
     <CustomerLayout>
