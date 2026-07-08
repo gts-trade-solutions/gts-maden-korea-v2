@@ -22,7 +22,7 @@
 //
 // Non-Supabase URLs (e.g., unsplash banners) pass through unchanged.
 
-import { STORAGE_BACKEND } from "@/lib/storage/backend";
+import { STORAGE_BACKEND, supabaseUrlToCdn } from "@/lib/storage/backend";
 
 const SUPABASE_OBJECT_PATH = "/storage/v1/object/public/";
 const SUPABASE_RENDER_PATH = "/storage/v1/render/image/public/";
@@ -34,10 +34,12 @@ type LoaderArgs = {
 };
 
 export function supabaseImageLoader({ src, width, quality }: LoaderArgs): string {
-  // S3 backend: there is no Supabase render/image transform equivalent, so serve
-  // the object directly (no rewrite). Revisit with a CloudFront image-transform.
+  // S3 backend: no Supabase render/image transform equivalent, so serve the
+  // object directly — but if the stored value is a full Supabase Storage URL
+  // (many *_url columns hold these), rewrite the host to CloudFront so the
+  // browser never hits Supabase. The S3 object lives at the same <bucket>/<key>.
   if (STORAGE_BACKEND === "s3") {
-    return src;
+    return supabaseUrlToCdn(src);
   }
 
   // Only rewrite Supabase storage URLs. Anything else (unsplash hero

@@ -13,6 +13,7 @@ import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Volume2, VolumeX } from "lucide-react";
 import { supabaseImageLoader } from "@/lib/supabaseImageLoader";
+import { supabaseUrlToCdn } from "@/lib/storage/backend";
 
 // Shared carousel primitive used by both home-page video sections.
 // It owns: scroll-snap loop, single-active-video pattern, autoplay tick,
@@ -398,14 +399,14 @@ function ReelCard<T extends ReelItem>({
             muted={isMuted}
             playsInline
             preload="metadata"
-            poster={video.thumbnail_url ?? undefined}
+            poster={video.thumbnail_url ? supabaseUrlToCdn(video.thumbnail_url) : undefined}
             onLoadedData={() => setVideoReady(true)}
             onCanPlay={() => setVideoReady(true)}
             controls={false}
             disablePictureInPicture
             controlsList="nodownload noplaybackrate"
           >
-            <source src={video.video_url ?? ""} type="video/mp4" />
+            <source src={video.video_url ? supabaseUrlToCdn(video.video_url) : ""} type="video/mp4" />
           </video>
         )}
 

@@ -5,6 +5,7 @@ import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { ChevronLeft, ChevronRight, ExternalLink, Volume2, VolumeX, X } from "lucide-react";
 import { CompactProductCard } from "@/components/CompactProductCard";
+import { supabaseUrlToCdn } from "@/lib/storage/backend";
 import type { AttachedProduct } from "@/types/attached_product";
 
 // Normalized shape both carousels feed into the modal. Whatever extra fields
@@ -195,8 +196,8 @@ export function VideoPlayerModal({ open, items, startIndex, onClose }: Props) {
           <video
             key={current.id}
             ref={videoRef}
-            src={current.video_url}
-            poster={current.thumbnail_url ?? undefined}
+            src={supabaseUrlToCdn(current.video_url)}
+            poster={current.thumbnail_url ? supabaseUrlToCdn(current.thumbnail_url) : undefined}
             className="block h-full w-full object-contain sm:h-[75vh] sm:w-auto sm:aspect-[9/16]"
             autoPlay
             loop

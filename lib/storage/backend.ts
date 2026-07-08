@@ -12,6 +12,9 @@
 // resolving under both backends.
 
 const SUPABASE_MARKER = "/storage/v1/object/public/";
+// Supabase's image-transform endpoint uses a different prefix but the same
+// `<bucket>/<key>` shape after it.
+const SUPABASE_RENDER_MARKER = "/storage/v1/render/image/public/";
 
 export type StorageBackend = "supabase" | "s3";
 
@@ -22,6 +25,31 @@ const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 // S3/CloudFront base (no trailing slash needed), e.g.
 // https://madenkorea-media.s3.ap-south-1.amazonaws.com  or a CloudFront domain.
 const MEDIA_CDN_URL = (process.env.NEXT_PUBLIC_MEDIA_CDN_URL || "").replace(/\/+$/, "");
+
+/**
+ * Bucket-agnostic rewrite of a full Supabase Storage URL (object OR render
+ * endpoint) to the active backend's URL. Under S3 this maps
+ *   https://<proj>.supabase.co/storage/v1/object/public/<bucket>/<key>
+ *   https://<proj>.supabase.co/storage/v1/render/image/public/<bucket>/<key>?...
+ * to `${CDN}/<bucket>/<key>` (the S3 objects live at the same `<bucket>/<key>`).
+ * Anything that isn't one of our Supabase Storage URLs is returned unchanged, so
+ * external URLs (Instagram/OAuth avatars) and already-CDN URLs pass through.
+ * Under the Supabase backend it's a no-op. Used by the <Image> loader and any
+ * code path that renders a stored full URL directly.
+ */
+export function supabaseUrlToCdn(url: string): string {
+  if (STORAGE_BACKEND !== "s3" || !MEDIA_CDN_URL || !url) return url;
+  for (const marker of [SUPABASE_MARKER, SUPABASE_RENDER_MARKER]) {
+    const idx = url.indexOf(marker);
+    if (idx >= 0) {
+      let suffix = url.slice(idx + marker.length); // "<bucket>/<key>[?transform]"
+      const q = suffix.indexOf("?");
+      if (q >= 0) suffix = suffix.slice(0, q); // drop Supabase render params
+      return `${MEDIA_CDN_URL}/${suffix}`;
+    }
+  }
+  return url;
+}
 
 /**
  * Recover the bare object key (no host, no bucket prefix) from any stored value:

@@ -9,6 +9,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getRouteAuth } from "@/lib/auth/routeUser";
+import { prisma } from "@/lib/db/prisma";
 import {
   SUPPORTED_CURRENCIES,
   isSupportedCurrency,
@@ -17,7 +18,7 @@ import {
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
-  const { user, sb } = await getRouteAuth(req);
+  const { user } = await getRouteAuth(req);
   if (!user) {
     return NextResponse.json(
       { ok: false, error: "Unauthorized" },
@@ -25,33 +26,13 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  if (process.env.CATALOG_BACKEND === "mysql") {
-    try {
-      const { getDisplayCurrencyMysql } = await import("@/lib/data/influencer");
-      return NextResponse.json({
-        ok: true,
-        display_currency: await getDisplayCurrencyMysql(user.id),
-        supported: SUPPORTED_CURRENCIES,
-      });
-    } catch (e) {
-      console.error("[me/display-currency] MySQL read failed, falling back to Supabase:", e);
-    }
-  }
-
-  const { data, error } = await sb
-    .from("influencer_profiles")
-    .select("display_currency")
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (error) {
-    return NextResponse.json(
-      { ok: false, error: error.message },
-      { status: 400 }
-    );
-  }
+  const row = await prisma.influencer_profiles.findUnique({
+    where: { user_id: user.id },
+    select: { display_currency: true },
+  });
   return NextResponse.json({
     ok: true,
-    display_currency: data?.display_currency || "INR",
+    display_currency: row?.display_currency || "INR",
     supported: SUPPORTED_CURRENCIES,
   });
 }
@@ -64,10 +45,6 @@ export async function PATCH(req: NextRequest) {
       { status: 401 }
     );
   }
-  // NextAuth has no Supabase session — the influencer_profiles update + the
-  // mirror read need a service-role client scoped by user.id.
-  const { supabaseForUser } = await import("@/lib/supabaseRoute");
-  const sb = supabaseForUser(user.id);
   const body = await req.json().catch(() => ({}));
   const next = String(body.display_currency || "").toUpperCase();
   if (!isSupportedCurrency(next)) {
@@ -76,23 +53,17 @@ export async function PATCH(req: NextRequest) {
       { status: 400 }
     );
   }
-  const { error } = await sb
-    .from("influencer_profiles")
-    .update({ display_currency: next, updated_at: new Date().toISOString() })
-    .eq("user_id", user.id);
-  if (error) {
+
+  try {
+    await prisma.influencer_profiles.update({
+      where: { user_id: user.id },
+      data: { display_currency: next, updated_at: new Date() },
+    });
+  } catch (e: any) {
     return NextResponse.json(
-      { ok: false, error: error.message },
+      { ok: false, error: e?.message || "UPDATE_FAILED" },
       { status: 400 }
     );
-  }
-
-  // Mirror the change into MySQL (the GET reads display_currency from MySQL).
-  try {
-    const { mirrorInfluencerProfileIntoMysql } = await import("@/lib/data/influencer");
-    await mirrorInfluencerProfileIntoMysql(sb, user.id);
-  } catch (e) {
-    console.error("[dual-write] display-currency MySQL mirror failed:", e);
   }
 
   return NextResponse.json({ ok: true, display_currency: next });
