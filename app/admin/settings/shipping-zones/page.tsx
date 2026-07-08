@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/contexts/AuthContext";
-import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -34,11 +33,8 @@ export default function ShippingZonesPage() {
     }
     (async () => {
       try {
-        const { data: s } = await supabase.auth.getSession();
-        const token = s?.session?.access_token;
         const res = await fetch("/api/admin/shipping-zones", {
           credentials: "include",
-          headers: token ? { authorization: `Bearer ${token}` } : undefined,
           cache: "no-store",
         });
         const body = await res.json();
@@ -79,14 +75,11 @@ export default function ShippingZonesPage() {
 
     setSaving(true);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch("/api/admin/shipping-zones", {
         method: "POST",
         credentials: "include",
         headers: {
           "content-type": "application/json",
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           zones: zones.map((z) => ({

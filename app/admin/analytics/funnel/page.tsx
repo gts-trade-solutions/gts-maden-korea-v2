@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/lib/contexts/AuthContext";
-import { supabase } from "@/lib/supabaseClient";
 
 type Stage = { key: string; label: string; count: number };
 type Resp = {
@@ -40,11 +39,8 @@ export default function AdminFunnelPage() {
     (async () => {
       setLoading(true);
       try {
-        const { data: s } = await supabase.auth.getSession();
-        const token = s?.session?.access_token;
         const res = await fetch(`/api/admin/analytics/funnel?range=${range}`, {
           credentials: "include",
-          headers: token ? { authorization: `Bearer ${token}` } : undefined,
           cache: "no-store",
         });
         if (!res.ok) throw new Error(await res.text());

@@ -9,7 +9,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/contexts/AuthContext";
-import { supabase } from "@/lib/supabaseClient";
 import { AdminBackBar } from "@/components/admin/AdminBackBar";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -79,13 +78,10 @@ export default function AdminNotificationsPage() {
   const fetchFeed = useCallback(async () => {
     setLoading(true);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const at = s?.session?.access_token;
       const params = new URLSearchParams({ limit: "100" });
       if (unreadOnly) params.set("unread_only", "1");
       const res = await fetch(`/api/admin/notifications?${params}`, {
         credentials: "include",
-        headers: at ? { authorization: `Bearer ${at}` } : undefined,
         cache: "no-store",
       });
       const body = await res.json().catch(() => ({}));
@@ -112,12 +108,9 @@ export default function AdminNotificationsPage() {
   const markRead = async (id: string, alreadyRead: boolean) => {
     if (alreadyRead) return;
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const at = s?.session?.access_token;
       await fetch(`/api/admin/notifications/${encodeURIComponent(id)}/read`, {
         method: "POST",
         credentials: "include",
-        headers: at ? { authorization: `Bearer ${at}` } : undefined,
       });
       setItems((prev) =>
         prev.map((n) => (n.id === id ? { ...n, read: true } : n))
@@ -131,12 +124,9 @@ export default function AdminNotificationsPage() {
   const markAll = async () => {
     setMarkingAll(true);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const at = s?.session?.access_token;
       const res = await fetch("/api/admin/notifications/read-all", {
         method: "POST",
         credentials: "include",
-        headers: at ? { authorization: `Bearer ${at}` } : undefined,
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok || body?.ok === false) {

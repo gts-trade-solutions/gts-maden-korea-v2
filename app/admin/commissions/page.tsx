@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/contexts/AuthContext";
-import { supabase } from "@/lib/supabaseClient";
 import { AdminBackBar } from "@/components/admin/AdminBackBar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -64,13 +63,10 @@ export default function AdminCommissionsPage() {
   const fetchRows = async (selected: Tab) => {
     setLoading(true);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch(
         `/api/admin/commissions?status=${encodeURIComponent(selected)}&limit=200`,
         {
           credentials: "include",
-          headers: token ? { authorization: `Bearer ${token}` } : undefined,
           cache: "no-store",
         }
       );
@@ -89,13 +85,10 @@ export default function AdminCommissionsPage() {
 
   const fetchAutoDays = async () => {
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch(
         "/api/admin/settings/commission-auto-approve",
         {
           credentials: "include",
-          headers: token ? { authorization: `Bearer ${token}` } : undefined,
           cache: "no-store",
         }
       );
@@ -142,14 +135,11 @@ export default function AdminCommissionsPage() {
   ) => {
     setBusyRow(orderId);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch("/api/admin/commissions", {
         method: "PATCH",
         credentials: "include",
         headers: {
           "content-type": "application/json",
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({ order_id: orderId, status }),
       });
@@ -176,14 +166,11 @@ export default function AdminCommissionsPage() {
     }
     setSavingDays(true);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch("/api/admin/settings/commission-auto-approve", {
         method: "PATCH",
         credentials: "include",
         headers: {
           "content-type": "application/json",
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({ days: value }),
       });

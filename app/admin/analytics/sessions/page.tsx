@@ -24,7 +24,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useAuth } from "@/lib/contexts/AuthContext";
-import { supabase } from "@/lib/supabaseClient";
 
 type Session = {
   session_id: string;
@@ -154,13 +153,10 @@ function SessionsListInner() {
     (async () => {
       setLoading(true);
       try {
-        const { data: s } = await supabase.auth.getSession();
-        const token = s?.session?.access_token;
         const res = await fetch(
           `/api/admin/analytics/sessions?range=${range}&filter=${filter}&limit=500`,
           {
             credentials: "include",
-            headers: token ? { authorization: `Bearer ${token}` } : undefined,
             cache: "no-store",
           }
         );

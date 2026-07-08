@@ -19,7 +19,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
-import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Mail, AlertCircle, X, ShieldAlert } from "lucide-react";
@@ -44,11 +43,8 @@ export function EmailVerificationBanner() {
 
   const fetchStatus = useCallback(async () => {
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const at = s?.session?.access_token;
       const res = await fetch("/api/me/email-verification-status", {
         credentials: "include",
-        headers: at ? { authorization: `Bearer ${at}` } : undefined,
         cache: "no-store",
       });
       if (!res.ok) {
@@ -77,14 +73,11 @@ export function EmailVerificationBanner() {
   const resend = async () => {
     setResending(true);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const at = s?.session?.access_token;
       const res = await fetch("/api/auth/verify-email/resend", {
         method: "POST",
         credentials: "include",
         headers: {
           "content-type": "application/json",
-          ...(at ? { authorization: `Bearer ${at}` } : {}),
         },
       });
       const body = await res.json().catch(() => ({}));

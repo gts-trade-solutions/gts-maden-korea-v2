@@ -139,12 +139,9 @@ export default function KPartnershipVideosAdminPage() {
   const load = async () => {
     setLoading(true);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch("/api/admin/k-partnership-videos", {
         credentials: "include",
         cache: "no-store",
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok || !body.ok) {
@@ -277,14 +274,11 @@ export default function KPartnershipVideosAdminPage() {
   const setDefault = async (country: string | null) => {
     setSavingDefault(true);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch("/api/admin/k-partnership-videos", {
         method: "PATCH",
         credentials: "include",
         headers: {
           "content-type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({ default_country: country }),
       });

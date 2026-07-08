@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from "next/link";
 import { toast } from "sonner";
-import { supabase } from "@/lib/supabaseClient";
 import { uploadMedia } from "@/lib/storage/upload-client";
 import { resolveMediaUrl } from "@/lib/storage/backend";
 import { ProductMultiPicker, type PickerProduct } from "@/components/admin/ProductMultiPicker";
@@ -95,13 +94,10 @@ export default function AdminProductVideosPage() {
   async function fetchList() {
     setLoading(true);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch(
         `/api/admin/cms/product-videos?scope=${encodeURIComponent(scope)}`,
         {
           credentials: "include",
-          headers: token ? { authorization: `Bearer ${token}` } : undefined,
           cache: "no-store",
         }
       );
@@ -131,11 +127,8 @@ export default function AdminProductVideosPage() {
   useEffect(() => {
     (async () => {
       try {
-        const { data: s } = await supabase.auth.getSession();
-        const token = s?.session?.access_token;
         const res = await fetch("/api/admin/settings/home-video-limit", {
           credentials: "include",
-          headers: token ? { authorization: `Bearer ${token}` } : undefined,
           cache: "no-store",
         });
         const body = await res.json().catch(() => ({}));
@@ -163,14 +156,11 @@ export default function AdminProductVideosPage() {
     }
     setSavingLimit(true);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch("/api/admin/settings/home-video-limit", {
         method: "PATCH",
         credentials: "include",
         headers: {
           "content-type": "application/json",
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({ limit: value }),
       });
@@ -206,13 +196,10 @@ export default function AdminProductVideosPage() {
   // Load currently-attached products for an existing video.
   async function loadAttached(videoId: string): Promise<PickerProduct[]> {
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch(
         `/api/admin/video-products?kind=product&videoId=${encodeURIComponent(videoId)}`,
         {
           credentials: "include",
-          headers: token ? { authorization: `Bearer ${token}` } : undefined,
           cache: "no-store",
         }
       );
@@ -293,13 +280,10 @@ export default function AdminProductVideosPage() {
 
   async function resolveProductIdBySlug(slug: string) {
     if (!slug.trim()) return null;
-    const { data: s } = await supabase.auth.getSession();
-    const token = s?.session?.access_token;
     const res = await fetch(
       `/api/admin/catalog/product-by-slug?slug=${encodeURIComponent(slug.trim())}`,
       {
         credentials: "include",
-        headers: token ? { authorization: `Bearer ${token}` } : undefined,
         cache: "no-store",
       }
     );
@@ -317,12 +301,9 @@ export default function AdminProductVideosPage() {
   // `revalidateHome()` helper.
   async function revalidateHome() {
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       await fetch("/api/admin/product-videos/revalidate", {
         method: "POST",
         credentials: "include",
-        headers: token ? { authorization: `Bearer ${token}` } : undefined,
       });
     } catch {
       // ignore — non-critical

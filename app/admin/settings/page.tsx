@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/contexts/AuthContext';
-import { supabase } from '@/lib/supabaseClient';
 import { invalidateShippingConfigCache } from '@/lib/hooks/useShippingConfig';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -115,11 +114,8 @@ export default function AdminSettingsPage() {
     // reflects what's actually being applied at checkout.
     (async () => {
       try {
-        const { data: s } = await supabase.auth.getSession();
-        const token = s?.session?.access_token;
         const res = await fetch('/api/admin/settings/shipping', {
           credentials: 'include',
-          headers: token ? { authorization: `Bearer ${token}` } : undefined,
           cache: 'no-store',
         });
         if (!res.ok) return;
@@ -135,11 +131,8 @@ export default function AdminSettingsPage() {
     // Load business / legal / compliance info into the Business tab.
     (async () => {
       try {
-        const { data: s } = await supabase.auth.getSession();
-        const token = s?.session?.access_token;
         const res = await fetch('/api/admin/settings/business-info', {
           credentials: 'include',
-          headers: token ? { authorization: `Bearer ${token}` } : undefined,
           cache: 'no-store',
         });
         if (!res.ok) return;
@@ -172,11 +165,8 @@ export default function AdminSettingsPage() {
     // Load country contact overrides.
     (async () => {
       try {
-        const { data: s } = await supabase.auth.getSession();
-        const token = s?.session?.access_token;
         const res = await fetch('/api/admin/settings/country-contacts', {
           credentials: 'include',
-          headers: token ? { authorization: `Bearer ${token}` } : undefined,
           cache: 'no-store',
         });
         if (!res.ok) return;
@@ -200,11 +190,8 @@ export default function AdminSettingsPage() {
     // Load email verification global config.
     (async () => {
       try {
-        const { data: s } = await supabase.auth.getSession();
-        const token = s?.session?.access_token;
         const res = await fetch('/api/admin/settings/email-verification', {
           credentials: 'include',
-          headers: token ? { authorization: `Bearer ${token}` } : undefined,
           cache: 'no-store',
         });
         if (!res.ok) return;
@@ -219,11 +206,8 @@ export default function AdminSettingsPage() {
     // Load cookie consent banner delay.
     (async () => {
       try {
-        const { data: s } = await supabase.auth.getSession();
-        const token = s?.session?.access_token;
         const res = await fetch('/api/admin/settings/cookie-consent', {
           credentials: 'include',
-          headers: token ? { authorization: `Bearer ${token}` } : undefined,
           cache: 'no-store',
         });
         if (!res.ok) return;
@@ -237,14 +221,11 @@ export default function AdminSettingsPage() {
   const handleSaveCookieConsent = async () => {
     setSavingCookieConsent(true);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch('/api/admin/settings/cookie-consent', {
         method: 'POST',
         credentials: 'include',
         headers: {
           'content-type': 'application/json',
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           delaySeconds: cookieConsentDelay,
@@ -267,14 +248,11 @@ export default function AdminSettingsPage() {
   const handleSaveEmailVerification = async () => {
     setSavingEmailVerification(true);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch('/api/admin/settings/email-verification', {
         method: 'POST',
         credentials: 'include',
         headers: {
           'content-type': 'application/json',
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify(emailVerification),
       });
@@ -294,14 +272,11 @@ export default function AdminSettingsPage() {
   const handleSaveCountryContacts = async () => {
     setSavingCountryContacts(true);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch('/api/admin/settings/country-contacts', {
         method: 'PUT',
         credentials: 'include',
         headers: {
           'content-type': 'application/json',
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({ rows: countryContacts }),
       });
@@ -321,14 +296,11 @@ export default function AdminSettingsPage() {
   const handleSaveBusiness = async () => {
     setSavingBusiness(true);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch('/api/admin/settings/business-info', {
         method: 'POST',
         credentials: 'include',
         headers: {
           'content-type': 'application/json',
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify(business),
       });
@@ -365,14 +337,11 @@ export default function AdminSettingsPage() {
 
     setSavingShipping(true);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch('/api/admin/settings/shipping', {
         method: 'POST',
         credentials: 'include',
         headers: {
           'content-type': 'application/json',
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           deliveryThreshold: settings.freeShippingThreshold,

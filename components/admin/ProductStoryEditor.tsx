@@ -38,7 +38,6 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { supabase } from "@/lib/supabaseClient";
 import { adminWrite } from "@/lib/admin/catalog-write";
 import { uploadMedia, deleteMedia } from "@/lib/storage/upload-client";
 import { storyMediaUrl } from "@/lib/storyMediaUrl";
@@ -262,14 +261,11 @@ function Editor({ productId }: Props) {
     revalidateTimerRef.current = window.setTimeout(async () => {
       revalidateTimerRef.current = null;
       try {
-        const { data: s } = await supabase.auth.getSession();
-        const token = s?.session?.access_token;
         await fetch("/api/admin/story-blocks/revalidate", {
           method: "POST",
           credentials: "include",
           headers: {
             "content-type": "application/json",
-            ...(token ? { authorization: `Bearer ${token}` } : {}),
           },
           body: JSON.stringify({ productId }),
         });

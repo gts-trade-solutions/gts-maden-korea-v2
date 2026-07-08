@@ -3,7 +3,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabaseClient";
 import { uploadMedia, deleteMedia } from "@/lib/storage/upload-client";
 import { resolveMediaUrl } from "@/lib/storage/backend";
 import { adminWrite } from "@/lib/admin/catalog-write";
@@ -272,14 +271,11 @@ export function AdminProductEditor({ productId }: { productId: string }) {
     (async () => {
       setLoadingCountryOffers(true);
       try {
-        const { data: s } = await supabase.auth.getSession();
-        const token = s?.session?.access_token;
         const res = await fetch(
           `/api/admin/products/${encodeURIComponent(productId)}/country-prices`,
           {
             credentials: "include",
             cache: "no-store",
-            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
           }
         );
         const body = await res.json().catch(() => ({}));
@@ -524,8 +520,6 @@ export function AdminProductEditor({ productId }: { productId: string }) {
       // against current MRP and rejects with VALIDATION_FAILED /
       // OFFER_EXCEEDS_MRP if anything slipped through.
       try {
-        const { data: s } = await supabase.auth.getSession();
-        const token = s?.session?.access_token;
         const payloadOffers = countryOffers
           .filter((r) => r.offer_price !== "" && Number(r.offer_price) > 0)
           .map((r) => ({
@@ -540,7 +534,6 @@ export function AdminProductEditor({ productId }: { productId: string }) {
             credentials: "include",
             headers: {
               "content-type": "application/json",
-              ...(token ? { authorization: `Bearer ${token}` } : {}),
             },
             body: JSON.stringify({ offers: payloadOffers }),
           }
@@ -564,14 +557,11 @@ export function AdminProductEditor({ productId }: { productId: string }) {
       // Invalidate Next.js caches so the public storefront reflects the
       // change immediately (instead of waiting up to 5 minutes for ISR).
       try {
-        const { data: s } = await supabase.auth.getSession();
-        const token = s?.session?.access_token;
         await fetch("/api/admin/products/revalidate", {
           method: "POST",
           credentials: "include",
           headers: {
             "content-type": "application/json",
-            ...(token ? { authorization: `Bearer ${token}` } : {}),
           },
           body: JSON.stringify({ productId: model.id }),
         });
@@ -586,14 +576,11 @@ export function AdminProductEditor({ productId }: { productId: string }) {
       // it's safe to call on every save.
       if (model.is_published) {
         try {
-          const { data: s } = await supabase.auth.getSession();
-          const token = s?.session?.access_token;
           void fetch("/api/admin/content-translations/translate", {
             method: "POST",
             credentials: "include",
             headers: {
               "content-type": "application/json",
-              ...(token ? { authorization: `Bearer ${token}` } : {}),
             },
             body: JSON.stringify({ kind: "products", id: model.id }),
           }).catch(() => {});

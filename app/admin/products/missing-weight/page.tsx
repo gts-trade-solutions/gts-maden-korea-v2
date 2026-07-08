@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/lib/contexts/AuthContext";
-import { supabase } from "@/lib/supabaseClient";
 import { AdminBackBar } from "@/components/admin/AdminBackBar";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -39,11 +38,8 @@ export default function MissingWeightAuditPage() {
     }
     (async () => {
       try {
-        const { data: s } = await supabase.auth.getSession();
-        const token = s?.session?.access_token;
         const res = await fetch("/api/admin/products/missing-weight", {
           credentials: "include",
-          headers: token ? { authorization: `Bearer ${token}` } : undefined,
           cache: "no-store",
         });
         const body = await res.json();

@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/contexts/AuthContext";
-import { supabase } from "@/lib/supabaseClient";
 import { AdminBackBar } from "@/components/admin/AdminBackBar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -116,11 +115,8 @@ export default function InternationalShippingPage() {
     (async () => {
       setLoadError(null);
       try {
-        const { data: s } = await supabase.auth.getSession();
-        const token = s?.session?.access_token;
         const res = await fetch("/api/admin/settings/international-shipping", {
           credentials: "include",
-          headers: token ? { authorization: `Bearer ${token}` } : undefined,
           cache: "no-store",
         });
         const body = await res.json().catch(() => ({}));
@@ -264,14 +260,11 @@ export default function InternationalShippingPage() {
     );
 
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch("/api/admin/settings/international-shipping", {
         method: "POST",
         credentials: "include",
         headers: {
           "content-type": "application/json",
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           country,
@@ -321,14 +314,11 @@ export default function InternationalShippingPage() {
     }
     setSavingGlobals(true);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch("/api/admin/settings/international-shipping", {
         method: "PATCH",
         credentials: "include",
         headers: {
           "content-type": "application/json",
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           intl_packaging_tare_pct: tareNum,

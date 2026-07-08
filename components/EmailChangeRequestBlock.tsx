@@ -25,7 +25,6 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Clock, CheckCircle2, AlertCircle, MailCheck } from "lucide-react";
-import { supabase } from "@/lib/supabaseClient";
 import { toast } from "sonner";
 
 type RequestRow = {
@@ -49,12 +48,9 @@ export function EmailChangeRequestBlock() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const at = s?.session?.access_token;
       const res = await fetch("/api/me/email-change-request", {
         method: "GET",
         credentials: "include",
-        headers: at ? { authorization: `Bearer ${at}` } : undefined,
         cache: "no-store",
       });
       const body = await res.json().catch(() => ({}));
@@ -76,14 +72,11 @@ export function EmailChangeRequestBlock() {
     }
     setSubmitting(true);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const at = s?.session?.access_token;
       const res = await fetch("/api/me/email-change-request", {
         method: "POST",
         credentials: "include",
         headers: {
           "content-type": "application/json",
-          ...(at ? { authorization: `Bearer ${at}` } : {}),
         },
         body: JSON.stringify({
           requestedEmail,

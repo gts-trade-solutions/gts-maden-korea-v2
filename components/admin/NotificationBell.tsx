@@ -26,7 +26,6 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { supabase } from "@/lib/supabaseClient";
 import { toast } from "sonner";
 
 const POLL_INTERVAL_MS = 30_000;
@@ -80,11 +79,8 @@ export function NotificationBell() {
 
   const fetchFeed = useCallback(async () => {
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const at = s?.session?.access_token;
       const res = await fetch("/api/admin/notifications?limit=20", {
         credentials: "include",
-        headers: at ? { authorization: `Bearer ${at}` } : undefined,
         cache: "no-store",
       });
       if (!res.ok) return; // silent — bell stays at last known state
@@ -112,12 +108,9 @@ export function NotificationBell() {
 
   const markRead = useCallback(async (id: string) => {
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const at = s?.session?.access_token;
       await fetch(`/api/admin/notifications/${encodeURIComponent(id)}/read`, {
         method: "POST",
         credentials: "include",
-        headers: at ? { authorization: `Bearer ${at}` } : undefined,
       });
       // Optimistic local update.
       setItems((prev) =>
@@ -132,12 +125,9 @@ export function NotificationBell() {
   const markAll = useCallback(async () => {
     setMarkingAll(true);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const at = s?.session?.access_token;
       const res = await fetch("/api/admin/notifications/read-all", {
         method: "POST",
         credentials: "include",
-        headers: at ? { authorization: `Bearer ${at}` } : undefined,
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok || body?.ok === false) {

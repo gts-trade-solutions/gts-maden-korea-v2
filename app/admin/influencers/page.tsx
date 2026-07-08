@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -296,14 +295,11 @@ export default function AdminInfluencersPage() {
     decision: 'approved' | 'rejected'
   ) => {
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch('/api/admin/influencers/notify-decision', {
         method: 'POST',
         credentials: 'include',
         headers: {
           'content-type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({ request_id: requestId, decision }),
       });
@@ -323,11 +319,8 @@ export default function AdminInfluencersPage() {
   // pre-fills with what's stored, not stale defaults.
   const openEditCap = async (row: IR) => {
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch(`/api/admin/influencers/${encodeURIComponent(row.user_id)}`, {
         credentials: 'include',
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         cache: 'no-store',
       });
       const body = await res.json().catch(() => ({}));
@@ -391,8 +384,6 @@ export default function AdminInfluencersPage() {
       // Notify the new partner — best-effort, won't block the approval.
       void notifyDecision(capModal.request.id, 'approved');
     } else {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch(
         `/api/admin/influencers/${encodeURIComponent(capModal.request.user_id)}`,
         {
@@ -400,7 +391,6 @@ export default function AdminInfluencersPage() {
           credentials: 'include',
           headers: {
             'content-type': 'application/json',
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
           },
           body: JSON.stringify({
             commission_cap_pct: cap,
@@ -1326,14 +1316,11 @@ type UserMeta = {
 async function fetchUserMetaMap(ids: string[]): Promise<Record<string, UserMeta>> {
   if (ids.length === 0) return {};
   try {
-    const { data: s } = await supabase.auth.getSession();
-    const token = s?.session?.access_token;
     const res = await fetch(
       `/api/admin/users/lookup?ids=${encodeURIComponent(ids.join(','))}`,
       {
         credentials: 'include',
         cache: 'no-store',
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       }
     );
     const body = await res.json().catch(() => ({}));

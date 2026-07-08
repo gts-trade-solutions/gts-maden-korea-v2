@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/contexts/AuthContext";
-import { supabase } from "@/lib/supabaseClient";
 import { adminWrite } from "@/lib/admin/catalog-write";
 import { Button } from "@/components/ui/button";
 import {
@@ -92,17 +91,9 @@ export default function CurrenciesAdminPage() {
   const refresh = async () => {
     setRefreshing(true);
     try {
-      // Send the Supabase access token as a Bearer header in addition
-      // to the cookies. The refresh endpoint's `supabaseRouteClient()`
-      // path occasionally fails to resolve a session purely from
-      // cookies (e.g. on some SameSite / sub-domain configurations),
-      // and falling back to the bearer keeps the admin button working.
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch("/api/currency/refresh", {
         method: "POST",
         credentials: "include",
-        headers: token ? { authorization: `Bearer ${token}` } : undefined,
       });
       const body = await res.json();
       if (!res.ok || !body?.ok) {

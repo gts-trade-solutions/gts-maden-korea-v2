@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/contexts/AuthContext";
-import { supabase } from "@/lib/supabaseClient";
 import { NotificationBell } from "@/components/admin/NotificationBell";
 import {
   Card,
@@ -72,12 +71,9 @@ export default function AdminDashboard() {
     (async () => {
       setMetricsLoading(true);
       try {
-        const { data: s } = await supabase.auth.getSession();
-        const token = s?.session?.access_token;
         const res = await fetch("/api/admin/dashboard-metrics", {
           credentials: "include",
           cache: "no-store",
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         });
         const body = await res.json().catch(() => ({}));
         if (!cancelled && res.ok && body.ok) {

@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/contexts/AuthContext";
-import { supabase } from "@/lib/supabaseClient";
 import { AdminBackBar } from "@/components/admin/AdminBackBar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -277,13 +276,10 @@ export default function AdminUsersPage() {
   const fetchEmailRequests = async () => {
     setEmailRequestsLoading(true);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch(
         `/api/admin/email-change-requests?status=pending`,
         {
           credentials: "include",
-          headers: token ? { authorization: `Bearer ${token}` } : undefined,
           cache: "no-store",
         }
       );
@@ -303,8 +299,6 @@ export default function AdminUsersPage() {
   ) => {
     setVerifyBusy(userId);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch(
         `/api/admin/users/${encodeURIComponent(userId)}/verification`,
         {
@@ -312,7 +306,6 @@ export default function AdminUsersPage() {
           credentials: "include",
           headers: {
             "content-type": "application/json",
-            ...(token ? { authorization: `Bearer ${token}` } : {}),
           },
           body: JSON.stringify(payload),
         }
@@ -338,8 +331,6 @@ export default function AdminUsersPage() {
     const target = deleting;
     setDeletingId(target.id);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch(
         `/api/admin/users/${encodeURIComponent(target.id)}`,
         {
@@ -347,7 +338,6 @@ export default function AdminUsersPage() {
           credentials: "include",
           headers: {
             "content-type": "application/json",
-            ...(token ? { authorization: `Bearer ${token}` } : {}),
           },
           body: JSON.stringify({ confirmEmail: deleteConfirmEmail }),
         }
@@ -385,8 +375,6 @@ export default function AdminUsersPage() {
     if (!reviewingRequest || !reviewAction) return;
     setReviewBusy(true);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch(
         `/api/admin/email-change-requests/${encodeURIComponent(reviewingRequest.id)}`,
         {
@@ -394,7 +382,6 @@ export default function AdminUsersPage() {
           credentials: "include",
           headers: {
             "content-type": "application/json",
-            ...(token ? { authorization: `Bearer ${token}` } : {}),
           },
           body: JSON.stringify({
             action: reviewAction,
@@ -430,8 +417,6 @@ export default function AdminUsersPage() {
   ) => {
     setLoading(true);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const params = new URLSearchParams();
       if (qParam.trim()) params.set("q", qParam.trim());
       params.set("page", String(p));
@@ -444,7 +429,6 @@ export default function AdminUsersPage() {
       if (filterParams.country) params.set("country", filterParams.country);
       const res = await fetch(`/api/admin/users?${params.toString()}`, {
         credentials: "include",
-        headers: token ? { authorization: `Bearer ${token}` } : undefined,
         cache: "no-store",
       });
       const body: UsersResponse = await res.json();
@@ -551,14 +535,11 @@ export default function AdminUsersPage() {
   ) => {
     setBusyRow(row.id);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch(`/api/admin/users/${encodeURIComponent(row.id)}`, {
         method: "PATCH",
         credentials: "include",
         headers: {
           "content-type": "application/json",
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({ role: nextRole }),
       });

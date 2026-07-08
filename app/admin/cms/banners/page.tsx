@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { supabase } from "@/lib/supabaseClient";
 import { uploadMedia } from "@/lib/storage/upload-client";
 import { resolveMediaUrl } from "@/lib/storage/backend";
 import { adminWrite } from "@/lib/admin/catalog-write";
@@ -176,12 +175,9 @@ export default function BannersAdminPage() {
   // never surface its failure — the next ISR tick will catch up anyway.
   async function revalidateHome() {
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       await fetch("/api/admin/banners/revalidate", {
         method: "POST",
         credentials: "include",
-        headers: token ? { authorization: `Bearer ${token}` } : undefined,
       });
     } catch {
       // ignore — non-critical

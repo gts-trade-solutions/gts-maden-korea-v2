@@ -6,7 +6,6 @@ import { useParams, useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/lib/contexts/AuthContext";
-import { supabase } from "@/lib/supabaseClient";
 
 type Event = {
   id: string;
@@ -86,11 +85,8 @@ export default function SessionTimelinePage() {
       setLoading(true);
       setError(null);
       try {
-        const { data: s } = await supabase.auth.getSession();
-        const token = s?.session?.access_token;
         const res = await fetch(`/api/admin/analytics/sessions/${sessionId}`, {
           credentials: "include",
-          headers: token ? { authorization: `Bearer ${token}` } : undefined,
           cache: "no-store",
         });
         if (!res.ok) {

@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/contexts/AuthContext";
-import { supabase } from "@/lib/supabaseClient";
 import { AdminBackBar } from "@/components/admin/AdminBackBar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -44,11 +43,8 @@ export default function NotificationEmailsPage() {
   const load = async () => {
     setLoadError(null);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch("/api/admin/settings/notification-emails", {
         credentials: "include",
-        headers: token ? { authorization: `Bearer ${token}` } : undefined,
         cache: "no-store",
       });
       const body = await res.json().catch(() => ({}));
@@ -101,14 +97,11 @@ export default function NotificationEmailsPage() {
     }
     setAdding(true);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch("/api/admin/settings/notification-emails", {
         method: "POST",
         credentials: "include",
         headers: {
           "content-type": "application/json",
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           email,
@@ -139,14 +132,11 @@ export default function NotificationEmailsPage() {
       rs.map((r) => (r.id === id ? { ...r, active } : r))
     );
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch("/api/admin/settings/notification-emails", {
         method: "PATCH",
         credentials: "include",
         headers: {
           "content-type": "application/json",
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({ id, active }),
       });
@@ -164,14 +154,11 @@ export default function NotificationEmailsPage() {
   const removeRecipient = async (id: string, email: string) => {
     if (!confirm(`Remove ${email} from admin notifications?`)) return;
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
       const res = await fetch(
         `/api/admin/settings/notification-emails?id=${encodeURIComponent(id)}`,
         {
           method: "DELETE",
           credentials: "include",
-          headers: token ? { authorization: `Bearer ${token}` } : undefined,
         }
       );
       const body = await res.json().catch(() => ({}));
