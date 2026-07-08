@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { SUPPORTED_CURRENCIES } from "@/lib/currency";
+import { getSessionUser } from "@/lib/auth/session";
+import { prisma } from "@/lib/db/prisma";
 
 // Refresh `currency_rates` from the open.er-api.com free FX feed.
 //
@@ -15,14 +16,10 @@ import { SUPPORTED_CURRENCIES } from "@/lib/currency";
 // we pass `base=INR` and write the raw `rates[code]` value into
 // `rate_from_inr` (no inversion needed).
 
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const FX_ENDPOINT = "https://open.er-api.com/v6/latest/INR";
-
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
 
 async function isAuthorized(req: NextRequest): Promise<boolean> {
   const auth = req.headers.get("authorization") ?? "";
@@ -35,20 +32,14 @@ async function isAuthorized(req: NextRequest): Promise<boolean> {
     return true;
   }
 
-  // Path 2: signed-in admin session, resolved via the backend-aware seam
-  // (Supabase cookie/bearer today, NextAuth at the flip). Role is read from
-  // `profiles` via the service-role client (flip-safe).
+  // Path 2: signed-in admin session (NextAuth). Role is read from `profiles`.
   try {
-    const { getRouteUser } = await import("@/lib/auth/routeUser");
-    const userId = (await getRouteUser(req))?.id ?? null;
-    if (!userId) return false;
-
-    const { data: profile } = await supabaseAdmin
-      .from("profiles")
-      .select("role")
-      .eq("id", userId)
-      .maybeSingle();
-
+    const user = await getSessionUser();
+    if (!user?.id) return false;
+    const profile = await prisma.profiles.findUnique({
+      where: { id: user.id },
+      select: { role: true },
+    });
     return profile?.role === "admin" || profile?.role === "super_admin";
   } catch {
     return false;
@@ -89,7 +80,7 @@ export async function POST(req: NextRequest) {
 
   // Update only the currencies we care about. Anything outside our
   // supported set is ignored — keeps the table tidy.
-  const now = new Date().toISOString();
+  const now = new Date();
   const updates: Array<{ code: string; rate_from_inr: number }> = [];
   for (const code of SUPPORTED_CURRENCIES) {
     if (code === "INR") continue; // canonical, always 1
@@ -107,16 +98,18 @@ export async function POST(req: NextRequest) {
   }
 
   // Issue updates in parallel. They're small and the table is tiny.
-  const results = await Promise.all(
+  const results = await Promise.allSettled(
     updates.map(({ code, rate_from_inr }) =>
-      supabaseAdmin
-        .from("currency_rates")
-        .update({ rate_from_inr, last_updated_at: now })
-        .eq("code", code)
+      prisma.currency_rates.update({
+        where: { code },
+        data: { rate_from_inr, last_updated_at: now },
+      })
     )
   );
 
-  const failed = results.filter((r) => r.error).map((r) => r.error?.message);
+  const failed = results
+    .filter((r): r is PromiseRejectedResult => r.status === "rejected")
+    .map((r) => (r.reason as any)?.message ?? String(r.reason));
   if (failed.length) {
     return NextResponse.json(
       { ok: false, updated: updates.length - failed.length, errors: failed },
@@ -124,5 +117,5 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  return NextResponse.json({ ok: true, updated: updates.length, at: now });
+  return NextResponse.json({ ok: true, updated: updates.length, at: now.toISOString() });
 }
