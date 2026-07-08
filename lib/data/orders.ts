@@ -200,6 +200,10 @@ export async function createOrderFromCartMysql(
         discount_total: c!.discount_total ?? 0,
         total: c!.total_estimate ?? 0,
         address_snapshot: address ?? undefined,
+        // promo_snapshot is Json NOT NULL; its dbgenerated '{}' default isn't
+        // applied by Prisma on create, so set it explicitly (promo details are
+        // filled in later at payment-verify).
+        promo_snapshot: {},
         notes: notes ?? null,
         order_number: orderNumber,
       },
