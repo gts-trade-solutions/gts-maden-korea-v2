@@ -77,14 +77,8 @@ import { ProductCard } from "@/components/ProductCard";
 import { ProductStorySection } from "@/components/products/ProductStorySection";
 import { MobileBuyBar } from "@/components/products/MobileBuyBar";
 import type { StoryBlock } from "@/lib/types/productStory";
-import { supabase } from "@/lib/supabaseClient";
 import { uploadMedia } from "@/lib/storage/upload-client";
 import { resolveMediaUrl } from "@/lib/storage/backend";
-import {
-  fetchCountryOffers,
-  effectivePriceForCountry,
-  augmentProductsWithCountryOffers,
-} from "@/lib/pricing";
 import { isSupportedCountry, DEFAULT_COUNTRY, COUNTRY_PROFILES } from "@/lib/countries";
 import { CountryFlag } from "@/components/CountryFlag";
 import { supabaseImageLoader } from "@/lib/supabaseImageLoader";
@@ -468,28 +462,18 @@ export default function ProductPage({
       let prod: Product = product as Product;
       if (!prod) {
         setLoading(true);
-        const { data: fetched, error: pErr } = await supabase
-          .from("products")
-          .select(
-            `
-            id, slug, name, short_description, description,
-            price, currency, compare_at_price, sale_price, sale_starts_at, sale_ends_at,
-            is_published, brand_id, category_id, hero_image_path, stock_qty,
-            volume_ml, net_weight_g, country_of_origin, new_until, is_featured, is_trending, is_bundle,
-            made_in_korea, is_vegetarian, cruelty_free, toxin_free, paraben_free,
-            ingredients_md, key_features_md, additional_details_md, box_contents_md, key_benefits,
-            video_path, vendor_id,
-            brands ( name, slug ),
-            product_translations!left ( locale, short_description, description, ingredients_md, additional_details_md, key_features_md, box_contents_md, faq, key_benefits, additional_details )
-          `
-          )
-          .eq("slug", slug)
-          .eq("is_published", true)
-          .maybeSingle<Product>();
+        // Legacy safety net — the live route always hydrates initialProduct.
+        // Fetch from the MySQL-backed API route instead of Supabase.
+        const res = await fetch(
+          `/api/catalog/products/${encodeURIComponent(slug)}`,
+          { cache: "no-store" }
+        );
+        const json = await res.json().catch(() => ({} as any));
+        const fetched = json.product as Product | undefined;
 
         if (cancelled) return;
-        if (pErr || !fetched) {
-          console.error("Product fetch error:", pErr);
+        if (!res.ok || !fetched) {
+          console.error("Product fetch error:", json?.error);
           setLoading(false);
           setProduct(null);
           return;
@@ -523,52 +507,33 @@ export default function ProductPage({
       // they have non-trivial auth + sort + pagination interactions.
       const country = readCountryFromCookie();
       const hasInitialImages = (initialImages ?? []).length > 0;
-      const [
-        { data: imgs, error: iErr },
-        { data: vids, error: vErrV },
-        vendorDisclosure,
-        countryOffersMap,
-        relatedAugmented,
-        { data: reviewStatsRow },
-      ] = await Promise.all([
-        // Skip the images fetch when the server already gave us a
-        // populated gallery — saves a round trip on the warm path.
-        hasInitialImages
-          ? Promise.resolve({ data: initialImages ?? [], error: null as any })
-          : supabase
-              .from("product_images")
-              .select("storage_path, alt, sort_order")
-              .eq("product_id", prod.id)
-              .order("sort_order", { ascending: true }),
-        supabase
-          .from("product_videos")
-          .select("storage_path, thumbnail_path, alt, sort_order")
-          .eq("product_id", prod.id)
-          .order("sort_order", { ascending: true }),
-        prod.vendor_id
-          ? Promise.all([
-              supabase
-                .from("store_settings")
-                .select("marketplace_disclosure_enabled")
-                .eq("id", 1)
-                .maybeSingle<{ marketplace_disclosure_enabled: boolean }>(),
-              supabase
-                .from("vendors_public")
-                .select(
-                  "display_name, legal_name, gstin, email, phone, address_json"
-                )
-                .eq("id", prod.vendor_id)
-                .maybeSingle<Vendor>(),
-            ]).then(([{ data: cfg }, { data: v, error: vErr }]) => {
-              if (vErr) console.error("Vendor disclosure fetch error:", vErr);
-              return cfg?.marketplace_disclosure_enabled ? v ?? null : null;
-            })
-          : Promise.resolve(null),
-        fetchCountryOffers([prod.id], country, supabase),
+
+      const [extras, relatedAugmented] = await Promise.all([
+        // Every remaining PDP data piece (gallery images, videos, marketplace
+        // vendor disclosure, review stats, visitor-country offer) in a single
+        // MySQL round-trip via /api/catalog/pdp-extras. Replaces the browser's
+        // direct Supabase queries.
         (async () => {
-          // Related products now come from the API route (MySQL behind the
-          // CATALOG_BACKEND flag), so the browser no longer queries Supabase
-          // directly for this widget. Country offers are resolved server-side.
+          try {
+            const qs = new URLSearchParams({ product_id: prod.id, country });
+            if (prod.vendor_id) qs.set("vendor_id", prod.vendor_id);
+            const res = await fetch(`/api/catalog/pdp-extras?${qs.toString()}`, {
+              cache: "no-store",
+            });
+            return (await res.json()) as {
+              images?: ProductImage[];
+              videos?: ProductVideo[];
+              vendor?: Vendor | null;
+              reviewStats?: ReviewStats | null;
+              countryOffer?: number | null;
+            };
+          } catch {
+            return {} as Record<string, never>;
+          }
+        })(),
+        (async () => {
+          // Related products from the API route (MySQL). Country offers are
+          // resolved server-side.
           try {
             const qs = new URLSearchParams({ product_id: prod.id });
             if (prod.brand_id) qs.set("brand_id", prod.brand_id);
@@ -579,28 +544,22 @@ export default function ProductPage({
             return [] as Product[];
           }
         })(),
-        supabase
-          .from("product_review_stats")
-          .select("*")
-          .eq("product_id", prod.id)
-          .maybeSingle<ReviewStats>(),
       ]);
 
-      if (iErr) console.error("Images fetch error:", iErr);
-      if (vErrV) console.error("Videos fetch error:", vErrV);
       if (cancelled) return;
 
+      // Server-hydrated gallery wins; otherwise use the API images.
+      const imgs = hasInitialImages ? initialImages ?? [] : extras.images ?? [];
+      const vendorDisclosure = extras.vendor ?? null;
+      const countryOffer = extras.countryOffer;
+
       setProduct({ ...prod, vendors: vendorDisclosure });
-      setImages(imgs ?? []);
-      setVideos((vids ?? []) as ProductVideo[]);
+      setImages(imgs as ProductImage[]);
+      setVideos((extras.videos ?? []) as ProductVideo[]);
       setSelectedImage(0);
-      setCountryOfferPrice(
-        countryOffersMap[prod.id] != null
-          ? Number(countryOffersMap[prod.id])
-          : null
-      );
+      setCountryOfferPrice(countryOffer != null ? Number(countryOffer) : null);
       setRelated(relatedAugmented as Product[]);
-      setReviewStats(reviewStatsRow ?? null);
+      setReviewStats(extras.reviewStats ?? null);
       setLoading(false);
 
       try {
@@ -1213,12 +1172,13 @@ export default function ProductPage({
     setEditingReview(null);
     setReviewPage(1);
     await Promise.all([
-      supabase
-        .from("product_review_stats")
-        .select("*")
-        .eq("product_id", product.id)
-        .maybeSingle<ReviewStats>()
-        .then(({ data }) => setReviewStats(data ?? null)),
+      fetch(
+        `/api/catalog/pdp-extras?product_id=${encodeURIComponent(product.id)}`,
+        { cache: "no-store" }
+      )
+        .then((r) => r.json())
+        .then((j) => setReviewStats(j.reviewStats ?? null))
+        .catch(() => {}),
       fetchReviews(true),
     ]);
   }

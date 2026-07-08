@@ -285,6 +285,38 @@ export async function getReviewStatsMysql(productId: string) {
   };
 }
 
+// Product videos (PDP gallery). Mirrors the Supabase product_videos select.
+export async function getProductVideosMysql(productId: string) {
+  const rows = await prisma.product_videos.findMany({
+    where: { product_id: productId },
+    select: { storage_path: true, thumbnail_path: true, alt: true, sort_order: true },
+    orderBy: { sort_order: "asc" },
+  });
+  return jsonSafe(rows) as Array<{
+    storage_path: string; thumbnail_path: string | null; alt: string | null; sort_order: number;
+  }>;
+}
+
+// Marketplace vendor disclosure for the PDP. Returns the public-safe vendor
+// fields (the old Supabase `vendors_public` view) ONLY when the store has
+// marketplace disclosure enabled; otherwise null. Mirrors the storefront's
+// store_settings.marketplace_disclosure_enabled gate.
+export async function getVendorDisclosureMysql(vendorId: string) {
+  if (!vendorId) return null;
+  const settings = await prisma.store_settings.findFirst({
+    select: { marketplace_disclosure_enabled: true },
+  });
+  if (!settings?.marketplace_disclosure_enabled) return null;
+  const v = await prisma.vendors.findUnique({
+    where: { id: vendorId },
+    select: {
+      display_name: true, legal_name: true, gstin: true,
+      email: true, phone: true, address_json: true,
+    },
+  });
+  return v ? (jsonSafe(v) as any) : null;
+}
+
 export async function fetchCountryOffersMysql(productIds: string[], countryCode: string) {
   const offers: Record<string, number> = {};
   if (!productIds.length || !countryCode) return offers;
