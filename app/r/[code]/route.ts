@@ -3,7 +3,10 @@ import { NextResponse } from "next/server";
 import { cookies, headers } from "next/headers";
 import { createClient } from "@/utils/supabase/server"; // from 2.3
 
-export const runtime = "edge";           // fast
+// Was `runtime = "edge"`, but the referral-click log now writes directly to
+// MySQL via Prisma (replacing the old Supabase `log-referral-click` edge fn),
+// and Prisma requires the Node.js runtime.
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";  // always server-rendered
 
 const ATTRIBUTION_COOKIE = "mi_ref_code";
@@ -50,20 +53,41 @@ export async function GET(
     { p_code: code }
   );
 
-  // 3) Fire-and-forget click log via Edge Function
-  //    (doesn't block redirect — we intentionally don't await its success)
-  const functionsUrl =
-    process.env.NEXT_PUBLIC_SUPABASE_FUNCTIONS_URL ||
-    `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1`;
-
-  fetch(`${functionsUrl}/log-referral-click`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-forwarded-host": headers().get("host") || "",
-    },
-    body: JSON.stringify({ code, viewer_user_id: viewerUserId }),
-  }).catch(() => { /* swallow logging errors */ });
+  // 3) Fire-and-forget click log — inlined via Prisma/MySQL (replaces the old
+  //    Supabase `log-referral-click` edge function). Resolve the referral code
+  //    to its link id, then insert a `referral_clicks` row capturing viewer,
+  //    IP, UA and referrer. Best-effort: wrapped in try/catch and intentionally
+  //    NOT awaited so it never blocks the redirect.
+  (async () => {
+    try {
+      const { prisma } = await import("@/lib/db/prisma");
+      const link = await prisma.referral_links.findUnique({
+        where: { code },
+        select: { id: true },
+      });
+      if (link) {
+        const h = headers();
+        const ip =
+          h.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+          h.get("x-real-ip") ||
+          h.get("cf-connecting-ip") ||
+          "";
+        const ua = h.get("user-agent") || "";
+        const referer = h.get("referer") || "";
+        await prisma.referral_clicks.create({
+          data: {
+            referral_id: link.id,
+            viewer_user_id: viewerUserId,
+            user_agent: ua || null,
+            ip_hash: ip || null,
+            meta: { referer },
+          },
+        });
+      }
+    } catch {
+      /* swallow logging errors — never block the redirect */
+    }
+  })();
 
   // 4) Decide destination
   const first = Array.isArray(target) ? target[0] : target;

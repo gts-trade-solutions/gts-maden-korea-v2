@@ -15,6 +15,7 @@ import {
   DEFAULT_BUSINESS_PROFILE,
 } from "@/lib/businessInfo";
 import { createAdminNotification } from "@/lib/admin/notifications";
+import { jsonSafe } from "@/lib/db/serialize";
 import { getEmailTranslator } from "@/lib/i18n/email";
 import { getAdminRecipientEmails } from "@/lib/notificationRecipients";
 import { clearPromoCookie } from "@/lib/promo-cookie";
@@ -635,12 +636,21 @@ export async function POST(req: NextRequest) {
     try {
       let consentOk = true;
       if (order.user_id) {
-        const { data: prof } = await admin
-          .from("profiles")
-          .select("tracking_consent")
-          .eq("id", order.user_id)
-          .maybeSingle();
-        if (prof && prof.tracking_consent === false) consentOk = false;
+        if (MONEY_MYSQL) {
+          const { prisma } = await import("@/lib/db/prisma");
+          const prof = await prisma.profiles.findUnique({
+            where: { id: order.user_id },
+            select: { tracking_consent: true },
+          });
+          if (prof && prof.tracking_consent === false) consentOk = false;
+        } else {
+          const { data: prof } = await admin
+            .from("profiles")
+            .select("tracking_consent")
+            .eq("id", order.user_id)
+            .maybeSingle();
+          if (prof && prof.tracking_consent === false) consentOk = false;
+        }
       }
 
       if (consentOk) {
@@ -654,23 +664,44 @@ export async function POST(req: NextRequest) {
           dbg.push({ step: "events.identity.error", error: e?.message });
         }
 
-        await admin.from("events").insert({
-          user_id: order.user_id ?? null,
-          anon_id: anonId,
-          session_id: sessionId,
-          event_name: "order_placed",
-          path: "/api/razorpay/verify",
-          props: {
-            order_id: order.id,
-            order_number: order.order_number ?? null,
-            subtotal: order.subtotal,
-            shipping_fee: order.shipping_fee,
-            discount_total: discountAmount,
-            total: paidAmount,
-            provider_payment_id: razorpay_payment_id,
-            provider_order_id: razorpay_order_id,
-          },
-        });
+        const eventProps = {
+          order_id: order.id,
+          order_number: order.order_number ?? null,
+          subtotal: order.subtotal,
+          shipping_fee: order.shipping_fee,
+          discount_total: discountAmount,
+          total: paidAmount,
+          provider_payment_id: razorpay_payment_id,
+          provider_order_id: razorpay_order_id,
+        };
+
+        if (MONEY_MYSQL) {
+          // Port of the Supabase `events` insert. `anon_id`/`session_id` are
+          // NOT NULL in MySQL, so coalesce to "" when identity is unavailable.
+          // jsonSafe() coerces Prisma Decimal (subtotal/shipping_fee) → Number
+          // so the JSON `props` column stores plain values.
+          const { prisma } = await import("@/lib/db/prisma");
+          await prisma.events.create({
+            data: {
+              id: crypto.randomUUID(),
+              user_id: order.user_id ?? null,
+              anon_id: anonId ?? "",
+              session_id: sessionId ?? "",
+              event_name: "order_placed",
+              path: "/api/razorpay/verify",
+              props: jsonSafe(eventProps) as any,
+            },
+          });
+        } else {
+          await admin.from("events").insert({
+            user_id: order.user_id ?? null,
+            anon_id: anonId,
+            session_id: sessionId,
+            event_name: "order_placed",
+            path: "/api/razorpay/verify",
+            props: eventProps,
+          });
+        }
       } else {
         dbg.push({ step: "events.order_placed.skip", reason: "no consent" });
       }
