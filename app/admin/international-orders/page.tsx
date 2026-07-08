@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/contexts/AuthContext";
-import { supabase } from "@/lib/supabaseClient";
 import { adminWrite } from "@/lib/admin/catalog-write";
 import {
   Card,
@@ -131,35 +130,17 @@ export default function InternationalOrdersAdminPage() {
     })();
   }, [hasRole, router]);
 
-  // Realtime subscription: refetch the table whenever a row is inserted
-  // or updated. We refetch instead of merging the payload directly —
-  // simpler, idempotent, handles the rare cases where the payload
-  // doesn't carry all columns (e.g., when RLS strips fields). Admin
-  // RLS lets this user see every row, so refetches are complete.
-  //
-  // Channel is unmounted on cleanup to avoid leaks across navigations.
+  // Auto-refresh: poll the admin endpoint every 30s. Replaces the old Supabase
+  // realtime postgres_changes subscription — the data already loads from the
+  // MySQL-backed /api/admin/international-orders route, so polling keeps the
+  // list fresh without any Supabase dependency. The manual refresh button and
+  // load-on-mount are unchanged.
   useEffect(() => {
     if (!hasRole("admin")) return;
-
-    const channel = supabase
-      .channel("admin-international-orders")
-      .on(
-        "postgres_changes",
-        {
-          event: "*", // INSERT | UPDATE | DELETE
-          schema: "public",
-          table: "international_orders",
-        },
-        () => {
-          // No await needed; load() handles its own toast on error.
-          load();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    const id = setInterval(() => {
+      load();
+    }, 30000);
+    return () => clearInterval(id);
   }, [hasRole]);
 
   const refresh = async () => {
