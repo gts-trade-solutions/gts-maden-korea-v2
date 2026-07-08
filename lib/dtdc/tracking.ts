@@ -1,19 +1,18 @@
 import "server-only";
-import supabaseAdmin from "@/lib/supabaseAdmin";
+import { prisma } from "@/lib/db/prisma";
+import { randomUUID } from "node:crypto";
 import { DTDC_TRACKING, DTDC_ENV } from "./env";
 import { logDtdcApi } from "./logger";
 
 async function getCachedToken(): Promise<string | null> {
   const maxAgeMin = DTDC_TRACKING.tokenMaxAgeMinutes;
 
-  const { data } = await supabaseAdmin
-    .from("dtdc_tracking_tokens")
-    .select("token, created_at, expires_at")
-    .eq("env", DTDC_ENV)
-    .order("created_at", { ascending: false })
-    .limit(1);
+  const row = await prisma.dtdc_tracking_tokens.findFirst({
+    where: { env: DTDC_ENV },
+    orderBy: { created_at: "desc" },
+    select: { token: true, created_at: true, expires_at: true },
+  });
 
-  const row = data?.[0];
   if (!row?.token) return null;
 
   // If expires_at exists, respect it
@@ -28,10 +27,13 @@ async function getCachedToken(): Promise<string | null> {
 }
 
 async function saveToken(token: string, expires_at?: string | null) {
-  await supabaseAdmin.from("dtdc_tracking_tokens").insert({
-    env: DTDC_ENV,
-    token,
-    expires_at: expires_at ?? null,
+  await prisma.dtdc_tracking_tokens.create({
+    data: {
+      id: randomUUID(),
+      env: DTDC_ENV,
+      token,
+      expires_at: expires_at ? new Date(expires_at) : null,
+    },
   });
 }
 

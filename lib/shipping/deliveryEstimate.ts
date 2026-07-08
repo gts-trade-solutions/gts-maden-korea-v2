@@ -14,11 +14,8 @@
 // snappy. The admin write endpoints don't bust this cache; ETA is a
 // display-only number where 60s of staleness is acceptable.
 
-import { createClient } from "@supabase/supabase-js";
+import { prisma } from "@/lib/db/prisma";
 import { resolveIndianZone } from "@/lib/shipping/indianZones";
-
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
 const CACHE_TTL_MS = 60 * 1000;
 
@@ -30,12 +27,6 @@ export type DeliveryEstimate = {
   /** When source = 'zone', the matched zone key. */
   zoneKey?: string;
 };
-
-function client() {
-  return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-}
 
 // ─── India: cached zones + broad fallback ──────────────────────────
 
@@ -51,15 +42,9 @@ async function getIndianZones(): Promise<ZoneRow[]> {
   const now = Date.now();
   if (cachedZones && cachedZones.expiresAt > now) return cachedZones.value;
   try {
-    const sb = client();
-    const { data, error } = await sb
-      .from("shipping_zones")
-      .select("zone, eta_days_min, eta_days_max");
-    if (error || !data) {
-      cachedZones = { value: [], expiresAt: now + CACHE_TTL_MS };
-      return [];
-    }
-    const value = data as ZoneRow[];
+    const value = await prisma.shipping_zones.findMany({
+      select: { zone: true, eta_days_min: true, eta_days_max: true },
+    });
     cachedZones = { value, expiresAt: now + CACHE_TTL_MS };
     return value;
   } catch {
@@ -84,16 +69,10 @@ async function getCountryEtas(): Promise<CountryEtaRow[]> {
   if (cachedCountries && cachedCountries.expiresAt > now)
     return cachedCountries.value;
   try {
-    const sb = client();
-    const { data, error } = await sb
-      .from("country_shipping_rates")
-      .select("country, eta_days_min, eta_days_max")
-      .eq("active", true);
-    if (error || !data) {
-      cachedCountries = { value: [], expiresAt: now + CACHE_TTL_MS };
-      return [];
-    }
-    const value = data as CountryEtaRow[];
+    const value = await prisma.country_shipping_rates.findMany({
+      where: { active: true },
+      select: { country: true, eta_days_min: true, eta_days_max: true },
+    });
     cachedCountries = { value, expiresAt: now + CACHE_TTL_MS };
     return value;
   } catch {

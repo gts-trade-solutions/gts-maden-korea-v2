@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
 
 // Compact product reference returned by the picker. Stored on the host
 // component as the source of truth for what's attached to the video.
@@ -50,22 +49,26 @@ export function ProductMultiPicker({
     let cancelled = false;
     setSearching(true);
     const t = setTimeout(async () => {
-      let req = supabase
-        .from("products")
-        .select("id, slug, name, hero_image_path, is_published")
-        .or(`name.ilike.%${q}%,slug.ilike.%${q}%`)
-        .order("name", { ascending: true })
-        .limit(15);
-      if (publishedOnly) req = req.eq("is_published", true);
-      const { data, error } = await req;
-      if (cancelled) return;
-      if (error) {
-        console.error("ProductMultiPicker search error:", error);
-        setResults([]);
-      } else {
-        setResults(((data ?? []) as PickerProduct[]).filter((p) => p.id));
+      try {
+        const params = new URLSearchParams({ q });
+        if (publishedOnly) params.set("publishedOnly", "1");
+        const res = await fetch(
+          `/api/admin/catalog/product-search?${params.toString()}`,
+          { credentials: "include" }
+        );
+        const body = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok || !body?.ok) {
+          console.error("ProductMultiPicker search error:", body?.error);
+          setResults([]);
+        } else {
+          setResults(
+            ((body.products ?? []) as PickerProduct[]).filter((p) => p.id)
+          );
+        }
+      } finally {
+        if (!cancelled) setSearching(false);
       }
-      setSearching(false);
     }, 220);
     return () => {
       cancelled = true;

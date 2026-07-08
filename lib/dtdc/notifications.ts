@@ -1,5 +1,5 @@
 import "server-only";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { prisma } from "@/lib/db/prisma";
 import { sendEmail } from "@/lib/ses";
 import { sendWhatsAppTemplate } from "@/lib/whatsappMeta";
 
@@ -112,7 +112,7 @@ export type NotifyResult = {
  * propagating into the cron loop.
  */
 export async function notifyTransition(
-  admin: SupabaseClient,
+  admin: any,
   args: {
     order_id: string;
     awb: string | null;
@@ -124,11 +124,10 @@ export async function notifyTransition(
   if (!transition) return { skipped: "not_of_interest" };
 
   // Pull the customer's contact info from the order's address snapshot.
-  const { data: order } = await admin
-    .from("orders")
-    .select("id, order_number, address_snapshot")
-    .eq("id", args.order_id)
-    .maybeSingle();
+  const order = await prisma.orders.findFirst({
+    where: { id: args.order_id },
+    select: { id: true, order_number: true, address_snapshot: true },
+  });
 
   if (!order) return { skipped: "order_not_found" };
 

@@ -27,14 +27,16 @@
 
 export const dynamic = "force-dynamic";
 
+import { randomUUID } from "node:crypto";
 import {
   asKind,
-  adminSupabase,
   getAdminOr401,
   getAnthropicKey,
   json,
   KINDS,
 } from "../_lib";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import {
   TARGET_LOCALES,
   translateEntity,
@@ -42,7 +44,7 @@ import {
 } from "@/lib/contentTranslator";
 
 export async function POST(req: Request) {
-  const { error } = await getAdminOr401();
+  const { error } = await getAdminOr401(req);
   if (error) return error;
 
   const body = await req.json().catch(() => ({}));
@@ -66,25 +68,29 @@ export async function POST(req: Request) {
 
   const force = body?.force === true;
   const cfg = KINDS[kind];
-  const sb = adminSupabase();
+
+  const sourceSelect = Object.fromEntries(
+    cfg.sourceColumns.map((c) => [c, true])
+  );
 
   // 1) Fetch source row.
-  const { data: sourceRow, error: srcErr } = await sb
-    .from(cfg.sourceTable)
-    .select(cfg.sourceColumns.join(","))
-    .eq("id", id)
-    .maybeSingle<Record<string, any>>();
-
-  if (srcErr) return json({ ok: false, error: srcErr.message }, 500);
+  let sourceRow: Record<string, any> | null;
+  try {
+    sourceRow = (await (prisma as any)[cfg.sourceTable].findUnique({
+      where: { id },
+      select: sourceSelect,
+    })) as Record<string, any> | null;
+  } catch (e: any) {
+    return json({ ok: false, error: e?.message || "READ_FAILED" }, 500);
+  }
   if (!sourceRow) return json({ ok: false, error: "ENTITY_NOT_FOUND" }, 404);
 
   // 2) Fetch existing translations for these locales so we can
   // diff-skip and avoid clobbering human edits.
-  const { data: existing } = await sb
-    .from(cfg.translationsTable)
-    .select(`locale, source_hash, source`)
-    .eq(cfg.fkColumn, id)
-    .in("locale", locales as unknown as string[]);
+  const existing = (await (prisma as any)[cfg.translationsTable].findMany({
+    where: { [cfg.fkColumn]: id, locale: { in: locales as unknown as string[] } },
+    select: { locale: true, source_hash: true, source: true },
+  })) as any[];
 
   const existingByLocale = new Map<
     TargetLocale,
@@ -107,22 +113,18 @@ export async function POST(req: Request) {
     locales,
     existingByLocale,
     force,
-    onLocaleTranslated: async (_locale, row) => {
-      const { error: upErr } = await sb
-        .from(cfg.translationsTable)
-        .upsert(row, { onConflict: `${cfg.fkColumn},locale` });
-      if (upErr) throw new Error(upErr.message);
+    onLocaleTranslated: async (rowLocale, row) => {
+      // Upsert keyed on the (fk, locale) compound unique. The id column is
+      // Char(36) with no default, so an inserted row needs a generated UUID.
+      await (prisma as any)[cfg.translationsTable].upsert({
+        where: {
+          [`${cfg.fkColumn}_locale`]: { [cfg.fkColumn]: id, locale: rowLocale },
+        },
+        create: { id: randomUUID(), ...row },
+        update: { ...row },
+      });
     },
   });
 
-  // Dual-write: mirror this entity's translations into MySQL (the storefront
-  // reads localized copy from MySQL). One re-sync after all locales persist.
-  try {
-    const { mirrorTableToMysql } = await import("@/lib/data/mirror");
-    await mirrorTableToMysql(cfg.translationsTable, id);
-  } catch (e) {
-    console.error("[dual-write] content-translation MySQL mirror failed:", e);
-  }
-
-  return json({ ok: true, result });
+  return json({ ok: true, result: jsonSafe(result) });
 }

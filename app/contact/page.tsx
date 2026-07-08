@@ -19,7 +19,6 @@ import { Mail, Phone, MapPin, Clock, ShieldCheck, Building2, Globe2, User } from
 import { toast } from "sonner";
 import {
   DEFAULT_BUSINESS_PROFILE,
-  getBusinessProfile,
   type BusinessProfile,
 } from "@/lib/businessInfo";
 import { isSupportedCountry, DEFAULT_COUNTRY } from "@/lib/countries";
@@ -62,9 +61,13 @@ export default function ContactPage() {
   useEffect(() => {
     let cancelled = false;
     const country = readCountryFromCookie();
-    getBusinessProfile(country).then((p) => {
-      if (!cancelled) setProfile(p);
-    });
+    // getBusinessProfile is server-only now (Prisma) — fetch via the API route.
+    fetch(`/api/business-profile?country=${encodeURIComponent(country)}`)
+      .then((r) => r.json())
+      .then((p) => {
+        if (!cancelled && p) setProfile(p as BusinessProfile);
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };

@@ -3,13 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { supabase } from "@/lib/supabaseClient";
 import { uploadMedia } from "@/lib/storage/upload-client";
 import { ProductMultiPicker, type PickerProduct } from "@/components/admin/ProductMultiPicker";
 import { useAdminGate } from "@/lib/hooks/useAdminGate";
 import { adminWrite } from "@/lib/admin/catalog-write";
-
-const JOIN_TABLE = "home_influencer_video_products";
 
 type Row = {
   id: string;
@@ -102,19 +99,21 @@ export default function AdminInstagramVideosPage() {
 
   async function fetchList() {
     setLoading(true);
-    const { data, error } = await supabase
-      .from("home_influencer_videos")
-      .select("*")
-      .eq("page_scope", scope)
-      .order("position", { ascending: true });
-
-    if (error) {
-      console.error(error);
-      setRows([]);
-    } else {
-      setRows((data ?? []) as Row[]);
+    try {
+      const res = await fetch(
+        `/api/admin/cms/influencer-videos?scope=${encodeURIComponent(scope)}`,
+        { credentials: "include" }
+      );
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body?.ok) {
+        console.error(body?.error);
+        setRows([]);
+      } else {
+        setRows((body.videos ?? []) as Row[]);
+      }
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   useEffect(() => {
@@ -138,20 +137,26 @@ export default function AdminInstagramVideosPage() {
     setMsg("");
   }
 
-  // Load currently-attached products for an existing video.
+  // Load currently-attached products for an existing video (MySQL via the
+  // admin video-products route). Replaces the old browser Supabase join read.
   async function loadAttached(videoId: string): Promise<PickerProduct[]> {
-    const { data, error } = await supabase
-      .from(JOIN_TABLE)
-      .select(`position, products ( id, slug, name, hero_image_path )`)
-      .eq("video_id", videoId)
-      .order("position", { ascending: true });
-    if (error) {
-      console.error("loadAttached error:", error);
+    try {
+      const res = await fetch(
+        `/api/admin/video-products?kind=influencer&videoId=${encodeURIComponent(
+          videoId
+        )}`,
+        { credentials: "include" }
+      );
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body?.ok) {
+        console.error("loadAttached error:", body?.error);
+        return [];
+      }
+      return (body.products ?? []) as PickerProduct[];
+    } catch (e) {
+      console.error("loadAttached error:", e);
       return [];
     }
-    return ((data ?? []) as Array<{ position: number; products: any }>)
-      .filter((r) => !!r.products)
-      .map((r) => r.products as PickerProduct);
   }
 
   // Replace-all via server route. The route is admin-authed and uses the

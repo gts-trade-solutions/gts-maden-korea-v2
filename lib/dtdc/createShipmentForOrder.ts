@@ -1,5 +1,7 @@
 import "server-only";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
+import { randomUUID } from "node:crypto";
 import { dtdcCreateConsignment, DTDC_SHIPSY } from "@/lib/dtdc";
 import { buildConsignmentRequest } from "@/lib/dtdc/buildConsignmentRequest";
 
@@ -31,7 +33,7 @@ function errToString(e: any) {
 }
 
 export async function createDtdcShipmentForOrder(
-  admin: SupabaseClient,
+  admin: any,
   orderId: string,
   opts: CreateOpts
 ) {
@@ -47,13 +49,19 @@ export async function createDtdcShipmentForOrder(
   }
 
   // 1) Load order
-  const { data: order, error: oErr } = await admin
-    .from("orders")
-    .select("id, order_number, status, total, currency, address_snapshot")
-    .eq("id", orderId)
-    .maybeSingle();
+  const order = await prisma.orders.findFirst({
+    where: { id: orderId },
+    select: {
+      id: true,
+      order_number: true,
+      status: true,
+      total: true,
+      currency: true,
+      address_snapshot: true,
+    },
+  });
 
-  if (oErr || !order) throw new Error(oErr?.message || "Order not found");
+  if (!order) throw new Error("Order not found");
 
   // Allow create only if paid/processing (adjust if needed)
   if (!["paid", "processing", "shipped", "dispatched"].includes(order.status)) {
@@ -61,62 +69,60 @@ export async function createDtdcShipmentForOrder(
   }
 
   // 2) Load items
-  const { data: items, error: iErr } = await admin
-    .from("order_items")
-    .select("product_id, quantity, sku, name")
-    .eq("order_id", orderId);
-
-  if (iErr) throw new Error(iErr.message);
+  const items = await prisma.order_items.findMany({
+    where: { order_id: orderId },
+    select: { product_id: true, quantity: true, sku: true, name: true },
+  });
 
   const ids = Array.from(
     new Set((items ?? []).map((x) => x.product_id).filter(Boolean))
-  );
+  ) as string[];
 
   // 3) Load product weights — gross (with retail packaging), since
   //    that's what actually goes into the DTDC consignment box.
-  const { data: prods, error: pErr } = await admin
-    .from("products")
-    .select("id, gross_weight_g")
-    .in("id", ids);
-
-  if (pErr) throw new Error(pErr.message);
+  const prods = await prisma.products.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, gross_weight_g: true },
+  });
 
   const productMap: Record<string, { gross_weight_g?: number | null }> = {};
   (prods ?? []).forEach((p: any) => {
-    productMap[p.id] = { gross_weight_g: p.gross_weight_g ?? null };
+    productMap[p.id] = {
+      gross_weight_g: p.gross_weight_g == null ? null : Number(p.gross_weight_g),
+    };
   });
 
+  // Plain, JSON-friendly copy of the order for the request builder (Decimal → number).
+  const orderForBuild = jsonSafe(order) as any;
+
   // 4) Find existing active shipment
-  const { data: active } = await admin
-    .from("dtdc_shipments")
-    .select("*")
-    .eq("order_id", orderId)
-    .eq("is_active", true)
-    .maybeSingle();
+  const active = await prisma.dtdc_shipments.findFirst({
+    where: { order_id: orderId, is_active: true },
+  });
 
   // If active exists:
   // - force_new=false -> reuse same row (even if reference_number is null)
   // - force_new=true  -> deactivate it and create a fresh draft
   if (active?.id && opts.force_new) {
-    await admin
-      .from("dtdc_shipments")
-      .update({
+    await prisma.dtdc_shipments.updateMany({
+      where: { id: active.id },
+      data: {
         is_active: false,
         status: "failed",
         last_error: "Recreated by admin",
-      })
-      .eq("id", active.id);
+      },
+    });
   }
 
   // If reusing active row (force_new=false)
-  let shipment = active?.id && !opts.force_new ? active : null;
+  let shipment: any = active?.id && !opts.force_new ? active : null;
   const reused = !!(active?.id && !opts.force_new);
 
   // 5) Create a new draft shipment row if needed
   if (!shipment) {
-    const insertDraft = await admin
-      .from("dtdc_shipments")
-      .insert({
+    shipment = await prisma.dtdc_shipments.create({
+      data: {
+        id: randomUUID(),
         order_id: orderId,
         customer_code: DTDC_SHIPSY.customerCode,
         status: "draft",
@@ -126,26 +132,22 @@ export async function createDtdcShipmentForOrder(
         load_type: DTDC_SHIPSY.defaultLoadType,
         is_cod: !!opts.is_cod,
         cod_amount: opts.is_cod ? opts.cod_amount ?? order.total ?? null : null,
-      })
-      .select("*")
-      .single();
-
-    if (insertDraft.error) throw new Error(insertDraft.error.message);
-    shipment = insertDraft.data;
+      },
+    });
   } else {
     // Ensure reused row stays active and is in draft-like state for retry
-    await admin
-      .from("dtdc_shipments")
-      .update({
+    await prisma.dtdc_shipments.updateMany({
+      where: { id: shipment.id },
+      data: {
         is_active: true,
         status: shipment.status === "created" ? shipment.status : "draft",
-      })
-      .eq("id", shipment.id);
+      },
+    });
   }
 
   // 6) Build request payload (even in test mode we store it for debugging)
   const requestBody = buildConsignmentRequest({
-    order,
+    order: orderForBuild,
     items: (items ?? []) as any,
     products: productMap,
     opts: {
@@ -154,16 +156,16 @@ export async function createDtdcShipmentForOrder(
     },
   });
 
-  await admin
-    .from("dtdc_shipments")
-    .update({ dtdc_request: requestBody })
-    .eq("id", shipment.id);
+  await prisma.dtdc_shipments.updateMany({
+    where: { id: shipment.id },
+    data: { dtdc_request: requestBody as any },
+  });
 
   // 7) TEST MODE: do not call DTDC; generate mock AWB and mark as created
   if (isTest) {
     // If already has reference_number, just return it
     if (shipment.reference_number) {
-      return { shipment, reused: true };
+      return { shipment: jsonSafe(shipment), reused: true };
     }
 
     const mockRef = `TEST-${order.order_number || order.id}-${Date.now()}`;
@@ -174,20 +176,17 @@ export async function createDtdcShipmentForOrder(
       created_at: new Date().toISOString(),
     };
 
-    const upd = await admin
-      .from("dtdc_shipments")
-      .update({
+    const upd = await prisma.dtdc_shipments.update({
+      where: { id: shipment.id },
+      data: {
         status: "created",
         reference_number: mockRef,
-        dtdc_response: mockResp,
+        dtdc_response: mockResp as any,
         last_error: null,
-      })
-      .eq("id", shipment.id)
-      .select("*")
-      .single();
+      },
+    });
 
-    if (upd.error) throw new Error(upd.error.message);
-    return { shipment: upd.data, reused };
+    return { shipment: jsonSafe(upd), reused };
   }
 
   // 8) REAL MODE: Call DTDC create consignment
@@ -201,48 +200,44 @@ export async function createDtdcShipmentForOrder(
       const msg =
         resp?.data?.[0]?.message || resp?.message || "DTDC create failed";
 
-      await admin
-        .from("dtdc_shipments")
-        .update({
+      await prisma.dtdc_shipments.updateMany({
+        where: { id: shipment.id },
+        data: {
           status: "failed",
-          dtdc_response: resp,
+          dtdc_response: resp as any,
           last_error: msg,
           // keep is_active=true so user can retry without duplicate inserts
           is_active: true,
-        })
-        .eq("id", shipment.id);
+        },
+      });
 
       throw new Error(msg);
     }
 
-    const upd = await admin
-      .from("dtdc_shipments")
-      .update({
+    const upd = await prisma.dtdc_shipments.update({
+      where: { id: shipment.id },
+      data: {
         status: "created",
         reference_number: reference,
-        dtdc_response: resp,
+        dtdc_response: resp as any,
         last_error: null,
         is_active: true,
-      })
-      .eq("id", shipment.id)
-      .select("*")
-      .single();
+      },
+    });
 
-    if (upd.error) throw new Error(upd.error.message);
-
-    return { shipment: upd.data, reused };
+    return { shipment: jsonSafe(upd), reused };
   } catch (e: any) {
     const msg = errToString(e);
 
     // Also store readable error
-    await admin
-      .from("dtdc_shipments")
-      .update({
+    await prisma.dtdc_shipments.updateMany({
+      where: { id: shipment.id },
+      data: {
         status: "failed",
         last_error: msg,
         is_active: true, // keep active for retry without duplicates
-      })
-      .eq("id", shipment.id);
+      },
+    });
 
     throw new Error(msg);
   }

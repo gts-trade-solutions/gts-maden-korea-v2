@@ -20,11 +20,12 @@
 export const dynamic = "force-dynamic";
 
 import {
-  adminSupabase,
   getAdminOr401,
   json,
   KINDS,
 } from "../_lib";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import { TARGET_LOCALES, type TranslatableKind } from "@/lib/contentTranslator";
 
 const KIND_KEYS: TranslatableKind[] = ["products", "brands", "categories", "banners"];
@@ -36,9 +37,8 @@ const KIND_KEYS: TranslatableKind[] = ["products", "brands", "categories", "bann
 const MAX_RECENT_POOL = 1000;
 
 export async function GET(req: Request) {
-  const { error } = await getAdminOr401();
+  const { error } = await getAdminOr401(req);
   if (error) return error;
-  const sb = adminSupabase();
 
   const { searchParams } = new URL(req.url);
   const recentLimit = Math.min(
@@ -68,15 +68,10 @@ export async function GET(req: Request) {
     //    Without this, unpublished products that still have
     //    translation rows from earlier inflate translatedRows past
     //    the denominator (sourceRows × locales.length), giving >100%.
-    let sourceQ = sb.from(cfg.sourceTable).select("id");
-    if (cfg.sourceFilter) {
-      for (const [k, v] of Object.entries(cfg.sourceFilter)) {
-        sourceQ = sourceQ.eq(k, v as any);
-      }
-    }
-    const { data: sourceIdRows } = (await sourceQ) as {
-      data: { id: string }[] | null;
-    };
+    const sourceIdRows = (await (prisma as any)[cfg.sourceTable].findMany({
+      where: cfg.sourceFilter ?? {},
+      select: { id: true },
+    })) as { id: string }[];
     const sourceIds = (sourceIdRows ?? []).map((r) => r.id);
     const sourceRows = sourceIds.length;
     const sourceIdSet = new Set<string>(sourceIds);
@@ -88,9 +83,9 @@ export async function GET(req: Request) {
     //      - rows for unpublished/deleted entities don't count
     //    Cast on `select()` because template-string interpolation
     //    confuses the Supabase TS parser.
-    const { data: trRows } = (await sb
-      .from(cfg.translationsTable)
-      .select(`${cfg.fkColumn}, locale`)) as { data: any[] | null };
+    const trRows = (await (prisma as any)[cfg.translationsTable].findMany({
+      select: { [cfg.fkColumn]: true, locale: true },
+    })) as any[];
 
     const byLocale: Record<string, number> = {};
     const perEntity: Record<string, Set<string>> = {};
@@ -142,11 +137,20 @@ export async function GET(req: Request) {
   let recentTotal = 0;
   for (const kind of KIND_KEYS) {
     const cfg = KINDS[kind];
-    const { data, count } = (await sb
-      .from(cfg.translationsTable)
-      .select(`${cfg.fkColumn}, locale, source, updated_at`, { count: "exact" })
-      .order("updated_at", { ascending: false })
-      .limit(perTablePool)) as { data: any[] | null; count: number | null };
+    const model = (prisma as any)[cfg.translationsTable];
+    const [data, count] = await Promise.all([
+      model.findMany({
+        select: {
+          [cfg.fkColumn]: true,
+          locale: true,
+          source: true,
+          updated_at: true,
+        },
+        orderBy: { updated_at: "desc" },
+        take: perTablePool,
+      }) as Promise<any[]>,
+      model.count() as Promise<number>,
+    ]);
     recentTotal += count ?? 0;
     for (const r of data ?? []) {
       recent.push({
@@ -165,7 +169,7 @@ export async function GET(req: Request) {
     ok: true,
     locales: [...TARGET_LOCALES],
     summary,
-    recent: recentPage,
+    recent: jsonSafe(recentPage),
     recentTotal,
     recentOffset,
     recentLimit,

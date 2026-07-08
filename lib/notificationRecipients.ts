@@ -9,19 +9,10 @@
 // out into one DB hit per send. The admin write endpoint invalidates
 // the cache so changes propagate within that TTL anyway.
 
-import { createClient } from "@supabase/supabase-js";
-
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+import { prisma } from "@/lib/db/prisma";
 
 const CACHE_TTL_MS = 60 * 1000;
 let cached: { value: string[]; expiresAt: number } | null = null;
-
-function client() {
-  return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-}
 
 /**
  * Returns the active list of admin notification email addresses, in
@@ -34,17 +25,12 @@ export async function getAdminRecipientEmails(): Promise<string[]> {
   if (cached && cached.expiresAt > now) return cached.value;
 
   try {
-    const sb = client();
-    const { data, error } = await sb
-      .from("notification_recipients")
-      .select("email")
-      .eq("active", true)
-      .order("email", { ascending: true });
-    if (error || !data) {
-      cached = { value: [], expiresAt: now + CACHE_TTL_MS };
-      return [];
-    }
-    const value = (data as Array<{ email: string }>).map((r) => r.email);
+    const rows = await prisma.notification_recipients.findMany({
+      where: { active: true },
+      select: { email: true },
+      orderBy: { email: "asc" },
+    });
+    const value = rows.map((r) => r.email);
     cached = { value, expiresAt: now + CACHE_TTL_MS };
     return value;
   } catch {

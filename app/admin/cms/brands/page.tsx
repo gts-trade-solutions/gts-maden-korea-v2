@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabaseClient";
 import { uploadMedia } from "@/lib/storage/upload-client";
 import { resolveMediaUrl } from "@/lib/storage/backend";
 import { adminWrite } from "@/lib/admin/catalog-write";
@@ -104,22 +103,21 @@ export default function BrandsManagementPage() {
 
   async function loadBrands() {
     setLoading(true);
-    const { data, error } = await supabase
-      .from("brands")
-      .select(
-        "id, slug, name, description, thumbnail_path, thumbnail_url, active, position, created_at"
-      )
-      .order("position", { ascending: true })
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      console.error(error);
-      toast.error("Failed to load brands");
-      setBrands([]);
-    } else {
-      setBrands(data ?? []);
+    try {
+      const res = await fetch("/api/admin/cms/brands", {
+        credentials: "include",
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body?.ok) {
+        console.error(body?.error);
+        toast.error("Failed to load brands");
+        setBrands([]);
+      } else {
+        setBrands((body.brands ?? []) as DbBrand[]);
+      }
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   function genSlug(name: string) {

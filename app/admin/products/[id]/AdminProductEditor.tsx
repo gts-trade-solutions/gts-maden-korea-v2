@@ -438,13 +438,14 @@ export function AdminProductEditor({ productId }: { productId: string }) {
 
       /* delete removed image rows */
       if (toDeleteIds.length) {
-        // Read the storage paths first (so we can optionally purge the
-        // files) — adminWrite deletes by equality match and doesn't
-        // return the removed rows.
-        const { data: removed } = await supabase
-          .from("product_images")
-          .select("storage_path")
-          .in("id", toDeleteIds);
+        // Storage paths of the rows being removed come straight from the
+        // already-loaded model.images (same rows that produced toDeleteIds)
+        // — no extra DB read needed. adminWrite deletes by equality match
+        // and doesn't return the removed rows, so we capture paths up front
+        // to optionally purge the files afterwards.
+        const removedPaths = model.images
+          .filter((r) => r.remove && r.id && r.storage_path)
+          .map((r) => r.storage_path as string);
         for (const id of toDeleteIds) {
           await adminWrite({
             table: "product_images",
@@ -454,8 +455,7 @@ export function AdminProductEditor({ productId }: { productId: string }) {
           });
         }
         if (deleteMediaFromStorage) {
-          const paths = (removed ?? []).map((r: any) => r.storage_path);
-          for (const p of paths) {
+          for (const p of removedPaths) {
             if (p) await deleteMedia(bucket, p);
           }
         }

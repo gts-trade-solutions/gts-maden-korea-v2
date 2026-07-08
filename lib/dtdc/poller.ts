@@ -1,5 +1,6 @@
 import "server-only";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { prisma } from "@/lib/db/prisma";
+import { randomUUID } from "node:crypto";
 import { dtdcGetTrackDetails } from "./tracking";
 
 /**
@@ -77,7 +78,7 @@ export function mapShipmentToOrderStatus(
  * shipment + order status. Idempotent — safe to call multiple times.
  */
 export async function pollSingleShipment(
-  admin: SupabaseClient,
+  admin: any,
   shipment: {
     id: string;
     order_id: string;
@@ -110,10 +111,10 @@ export async function pollSingleShipment(
   } catch (err: any) {
     result.error = err?.message || "track_failed";
     // Still bump last_polled_at so we don't hot-loop on a failing AWB.
-    await admin
-      .from("dtdc_shipments")
-      .update({ last_polled_at: new Date().toISOString() })
-      .eq("id", shipment.id);
+    await prisma.dtdc_shipments.updateMany({
+      where: { id: shipment.id },
+      data: { last_polled_at: new Date() },
+    });
     return result;
   }
 
@@ -135,21 +136,40 @@ export async function pollSingleShipment(
       ev?.strActionDate || ev?.actionDate,
       ev?.strActionTime || ev?.actionTime
     );
+    const eventAt = eventAtIso ? new Date(eventAtIso) : null;
 
-    const upsertRes = await admin.from("dtdc_shipment_events").upsert(
-      {
-        shipment_id: shipment.id,
-        event_at: eventAtIso,
-        action,
-        origin,
-        destination,
-        remarks,
-        status_code,
-        raw: ev,
-      },
-      { onConflict: "shipment_id,event_at,action" }
-    );
-    if (!upsertRes.error) eventsAdded += 1;
+    // Manual upsert on the (shipment_id, event_at, action) dedup key.
+    // event_at can be null, which a compound-unique upsert can't express,
+    // so we find-then-create/update to preserve the old onConflict behavior.
+    try {
+      const existing = await prisma.dtdc_shipment_events.findFirst({
+        where: { shipment_id: shipment.id, event_at: eventAt, action },
+        select: { id: true },
+      });
+      if (existing) {
+        await prisma.dtdc_shipment_events.update({
+          where: { id: existing.id },
+          data: { origin, destination, remarks, status_code, raw: ev },
+        });
+      } else {
+        await prisma.dtdc_shipment_events.create({
+          data: {
+            id: randomUUID(),
+            shipment_id: shipment.id,
+            event_at: eventAt,
+            action,
+            origin,
+            destination,
+            remarks,
+            status_code,
+            raw: ev,
+          },
+        });
+      }
+      eventsAdded += 1;
+    } catch {
+      // Best-effort per event, mirroring the old upsert (ignore failures).
+    }
   }
   result.events_added = eventsAdded;
 
@@ -163,21 +183,29 @@ export async function pollSingleShipment(
 
   // Update shipment row + bookkeeping.
   const update: Record<string, unknown> = {
-    last_polled_at: new Date().toISOString(),
+    last_polled_at: new Date(),
   };
   if (transitioned) {
     update.status = newShipmentStatus;
-    update.status_last_changed_at = new Date().toISOString();
+    update.status_last_changed_at = new Date();
   }
-  await admin.from("dtdc_shipments").update(update).eq("id", shipment.id);
+  await prisma.dtdc_shipments.updateMany({
+    where: { id: shipment.id },
+    data: update,
+  });
 
   // Sync order.status if the shipment moved forward.
   if (transitioned) {
     const targetOrderStatus = mapShipmentToOrderStatus(newShipmentStatus);
     if (targetOrderStatus) {
-      await admin.rpc("dtdc_apply_status_to_order", {
-        p_order_id: shipment.order_id,
-        p_new_status: targetOrderStatus,
+      // Replaces the dtdc_apply_status_to_order() SECURITY DEFINER RPC:
+      // move the order forward but never backward from a terminal status.
+      await prisma.orders.updateMany({
+        where: {
+          id: shipment.order_id,
+          status: { notIn: ["delivered", "returned", "cancelled"] },
+        },
+        data: { status: targetOrderStatus, updated_at: new Date() },
       });
     }
   }

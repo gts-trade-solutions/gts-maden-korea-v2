@@ -28,10 +28,7 @@
 // FX conversion to the buyer's currency happens downstream in
 // razorpay/create.
 
-import { createClient } from "@supabase/supabase-js";
-
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+import { prisma } from "@/lib/db/prisma";
 
 // Slab cutoffs in grams, ordered ascending. Round-up bracketing — any
 // effective weight ≤ N grams uses the row's slab column at index N.
@@ -73,12 +70,6 @@ export type IntlShippingSettings = {
   intl_max_shipping_weight_kg: number;
 };
 
-function client() {
-  return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-}
-
 /**
  * Read the active slab matrix for a destination country. Returns null
  * if the country isn't configured, isn't active, or the lookup errors.
@@ -91,35 +82,59 @@ export async function getCountryShippingRate(
   const upper = country.toUpperCase();
   if (upper === "IN") return null;
 
-  const sb = client();
-  const { data, error } = await sb
-    .from("country_shipping_rates")
-    .select(
-      "country, active, notes, slab_500g_inr, slab_1kg_inr, slab_2kg_inr, slab_3kg_inr, slab_5kg_inr, slab_7kg_inr, slab_10kg_inr, slab_15kg_inr, slab_20kg_inr"
-    )
-    .eq("country", upper)
-    .eq("active", true)
-    .maybeSingle();
-
-  if (error || !data) return null;
-  return data as CountryShippingRate;
+  try {
+    const row = await prisma.country_shipping_rates.findFirst({
+      where: { country: upper, active: true },
+      select: {
+        country: true,
+        active: true,
+        notes: true,
+        slab_500g_inr: true,
+        slab_1kg_inr: true,
+        slab_2kg_inr: true,
+        slab_3kg_inr: true,
+        slab_5kg_inr: true,
+        slab_7kg_inr: true,
+        slab_10kg_inr: true,
+        slab_15kg_inr: true,
+        slab_20kg_inr: true,
+      },
+    });
+    if (!row) return null;
+    // Decimal → number so the return matches the CountryShippingRate type.
+    return {
+      country: row.country,
+      active: row.active,
+      notes: row.notes,
+      slab_500g_inr: Number(row.slab_500g_inr),
+      slab_1kg_inr: Number(row.slab_1kg_inr),
+      slab_2kg_inr: Number(row.slab_2kg_inr),
+      slab_3kg_inr: Number(row.slab_3kg_inr),
+      slab_5kg_inr: Number(row.slab_5kg_inr),
+      slab_7kg_inr: Number(row.slab_7kg_inr),
+      slab_10kg_inr: Number(row.slab_10kg_inr),
+      slab_15kg_inr: Number(row.slab_15kg_inr),
+      slab_20kg_inr: Number(row.slab_20kg_inr),
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** Read the three global slab settings from store_settings (id=1). */
 export async function getIntlShippingSettings(): Promise<IntlShippingSettings> {
-  const sb = client();
-  const { data } = await sb
-    .from("store_settings")
-    .select(
-      "intl_packaging_tare_pct, intl_buffer_pct, intl_max_shipping_weight_kg"
-    )
-    .eq("id", 1)
-    .maybeSingle();
+  const data = await prisma.store_settings.findFirst({
+    select: {
+      intl_packaging_tare_pct: true,
+      intl_buffer_pct: true,
+      intl_max_shipping_weight_kg: true,
+    },
+  });
   return {
-    intl_packaging_tare_pct: Number((data as any)?.intl_packaging_tare_pct ?? 15),
-    intl_buffer_pct: Number((data as any)?.intl_buffer_pct ?? 20),
+    intl_packaging_tare_pct: Number(data?.intl_packaging_tare_pct ?? 15),
+    intl_buffer_pct: Number(data?.intl_buffer_pct ?? 20),
     intl_max_shipping_weight_kg: Number(
-      (data as any)?.intl_max_shipping_weight_kg ?? 20
+      data?.intl_max_shipping_weight_kg ?? 20
     ),
   };
 }

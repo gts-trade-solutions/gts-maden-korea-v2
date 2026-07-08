@@ -94,15 +94,30 @@ export default function AdminProductVideosPage() {
 
   async function fetchList() {
     setLoading(true);
-    const { data, error } = await supabase
-      .from('home_product_videos')
-      .select('id, product_id, title, description, page_scope, position, active, starts_at, ends_at, video_path, video_url, thumbnail_path, thumbnail_url, created_at, updated_at')
-      .eq('page_scope', scope)
-      .order('position', { ascending: true });
-
-    if (error) alert(error.message);
-    setRows((data ?? []) as Row[]);
-    setLoading(false);
+    try {
+      const { data: s } = await supabase.auth.getSession();
+      const token = s?.session?.access_token;
+      const res = await fetch(
+        `/api/admin/cms/product-videos?scope=${encodeURIComponent(scope)}`,
+        {
+          credentials: "include",
+          headers: token ? { authorization: `Bearer ${token}` } : undefined,
+          cache: "no-store",
+        }
+      );
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body?.ok) {
+        alert(body?.error || "Failed to load videos");
+        setRows([]);
+      } else {
+        setRows((body.videos ?? []) as Row[]);
+      }
+    } catch (e: any) {
+      alert(e?.message || "Failed to load videos");
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -190,18 +205,27 @@ export default function AdminProductVideosPage() {
 
   // Load currently-attached products for an existing video.
   async function loadAttached(videoId: string): Promise<PickerProduct[]> {
-    const { data, error } = await supabase
-      .from(JOIN_TABLE)
-      .select(`position, products ( id, slug, name, hero_image_path )`)
-      .eq("video_id", videoId)
-      .order("position", { ascending: true });
-    if (error) {
-      console.error("loadAttached error:", error);
+    try {
+      const { data: s } = await supabase.auth.getSession();
+      const token = s?.session?.access_token;
+      const res = await fetch(
+        `/api/admin/video-products?kind=product&videoId=${encodeURIComponent(videoId)}`,
+        {
+          credentials: "include",
+          headers: token ? { authorization: `Bearer ${token}` } : undefined,
+          cache: "no-store",
+        }
+      );
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || body?.ok === false) {
+        console.error("loadAttached error:", body?.error);
+        return [];
+      }
+      return (body.products ?? []) as PickerProduct[];
+    } catch (e) {
+      console.error("loadAttached error:", e);
       return [];
     }
-    return ((data ?? []) as Array<{ position: number; products: any }>)
-      .filter((r) => !!r.products)
-      .map((r) => r.products as PickerProduct);
   }
 
   // Replace-all via server route. Bypasses RLS on the join table (the
@@ -269,14 +293,21 @@ export default function AdminProductVideosPage() {
 
   async function resolveProductIdBySlug(slug: string) {
     if (!slug.trim()) return null;
-    const { data, error } = await supabase
-      .from('products')
-      .select('id')
-      .eq('slug', slug.trim())
-      .limit(1)
-      .single();
-    if (error) throw new Error(`Product not found for slug "${slug}"`);
-    return (data as { id: string }).id;
+    const { data: s } = await supabase.auth.getSession();
+    const token = s?.session?.access_token;
+    const res = await fetch(
+      `/api/admin/catalog/product-by-slug?slug=${encodeURIComponent(slug.trim())}`,
+      {
+        credentials: "include",
+        headers: token ? { authorization: `Bearer ${token}` } : undefined,
+        cache: "no-store",
+      }
+    );
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || !body?.ok || !body?.id) {
+      throw new Error(`Product not found for slug "${slug}"`);
+    }
+    return body.id as string;
   }
 
   // Tells the home route to drop its cached video-section data and

@@ -1,5 +1,3 @@
-import { createClient } from "@supabase/supabase-js";
-
 // NOTE: this module deliberately has NO `server-only` import. It's
 // pulled into the server-rendered footer (which gets bundled as a
 // client component when used inside CustomerLayout from a `'use client'`
@@ -23,18 +21,9 @@ import { createClient } from "@supabase/supabase-js";
 //     partner, contact }` shape. Use this on the Contact page, order email
 //     and any new surface that needs the two-company split.
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-
-// Stand-alone anon client. We don't import the project singleton from
-// `lib/supabaseClient.ts` because that one persists sessions to
-// localStorage and would noisy-warn in server contexts where there's no
-// window object.
-function client() {
-  return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-}
+// Data now reads from MySQL via Prisma. The Prisma client is imported
+// dynamically inside loadSnapshot() so this module stays client-bundle
+// safe (it is pulled into the `'use client'` FloatingWhatsApp footer).
 
 // ---------- Types ----------
 
@@ -158,28 +147,49 @@ async function loadSnapshot(): Promise<Snapshot> {
   const empty: Snapshot = { store: null, contacts: new Map() };
 
   try {
-    const sb = client();
-    const [storeRes, contactsRes] = await Promise.all([
-      sb
-        .from("store_settings")
-        .select(
-          "legal_entity_name, registered_address, public_phone, support_email, business_hours, grievance_officer_name, grievance_officer_designation, grievance_officer_email, gstin, cdsco_registration, jurisdiction_city, marketplace_disclosure_enabled, brand_legal_entity_name, brand_registered_address, brand_country_code, brand_email, partner_role_label"
-        )
-        .eq("id", 1)
-        .maybeSingle(),
-      sb
-        .from("country_contacts")
-        .select(
-          "country_code, contact_name, public_phone, whatsapp_number, support_email, business_hours, public_address, is_active"
-        )
-        .eq("is_active", true),
+    const { prisma } = await import("@/lib/db/prisma");
+    const [store, contacts] = await Promise.all([
+      prisma.store_settings.findFirst({
+        select: {
+          legal_entity_name: true,
+          registered_address: true,
+          public_phone: true,
+          support_email: true,
+          business_hours: true,
+          grievance_officer_name: true,
+          grievance_officer_designation: true,
+          grievance_officer_email: true,
+          gstin: true,
+          cdsco_registration: true,
+          jurisdiction_city: true,
+          marketplace_disclosure_enabled: true,
+          brand_legal_entity_name: true,
+          brand_registered_address: true,
+          brand_country_code: true,
+          brand_email: true,
+          partner_role_label: true,
+        },
+      }),
+      prisma.country_contacts.findMany({
+        where: { is_active: true },
+        select: {
+          country_code: true,
+          contact_name: true,
+          public_phone: true,
+          whatsapp_number: true,
+          support_email: true,
+          business_hours: true,
+          public_address: true,
+          is_active: true,
+        },
+      }),
     ]);
 
     const snap: Snapshot = {
-      store: storeRes.data ?? null,
+      store: store ?? null,
       contacts: new Map(),
     };
-    for (const row of contactsRes.data ?? []) {
+    for (const row of contacts ?? []) {
       const code = (row as any).country_code;
       if (typeof code === "string" && code.length > 0) {
         snap.contacts.set(code.toUpperCase(), row);

@@ -8,7 +8,9 @@
 // originating action (user signup, order, etc.) never breaks because
 // of a notification side-effect.
 
-import { createServiceClient } from "@/lib/supabaseServer";
+import { prisma } from "@/lib/db/prisma";
+import { Prisma } from "@prisma/client";
+import { randomUUID } from "node:crypto";
 
 export type AdminNotificationType =
   | "order_placed"
@@ -39,15 +41,17 @@ export async function createAdminNotification(
   opts: CreateNotificationOpts
 ): Promise<void> {
   try {
-    const sb = createServiceClient();
-    await sb.from("admin_notifications").insert({
-      type: opts.type,
-      title: opts.title,
-      body: opts.body ?? null,
-      link: opts.link ?? null,
-      severity: opts.severity ?? "info",
-      meta: opts.meta ?? null,
-      created_by: opts.createdBy ?? null,
+    await prisma.admin_notifications.create({
+      data: {
+        id: randomUUID(),
+        type: opts.type,
+        title: opts.title,
+        body: opts.body ?? null,
+        link: opts.link ?? null,
+        severity: opts.severity ?? "info",
+        meta: (opts.meta ?? Prisma.DbNull) as any,
+        created_by: opts.createdBy ?? null,
+      },
     });
   } catch (err) {
     console.error("[admin-notifications] insert failed:", err);

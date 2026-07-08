@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { getBusinessProfile } from "@/lib/businessInfo";
 import { isSupportedCountry, DEFAULT_COUNTRY } from "@/lib/countries";
 
 type FloatingWhatsAppProps = {
@@ -70,12 +69,19 @@ export function FloatingWhatsApp({
   useEffect(() => {
     let cancelled = false;
     const country = readCountryFromCookie();
-    getBusinessProfile(country).then((p) => {
-      if (cancelled) return;
-      // The resolver already prefers country override → env fallback.
-      const next = normalize(p.contact.whatsappNumber);
-      setResolved(next || normalize(phoneNumber));
-    });
+    // Fetch the business profile from the server (MySQL) — getBusinessProfile
+    // is server-only now (Prisma), so we can't call it in the browser.
+    fetch(`/api/business-profile?country=${encodeURIComponent(country)}`)
+      .then((r) => r.json())
+      .then((p) => {
+        if (cancelled) return;
+        // The resolver already prefers country override → env fallback.
+        const next = normalize(p?.contact?.whatsappNumber);
+        setResolved(next || normalize(phoneNumber));
+      })
+      .catch(() => {
+        if (!cancelled) setResolved(normalize(phoneNumber));
+      });
     return () => {
       cancelled = true;
     };

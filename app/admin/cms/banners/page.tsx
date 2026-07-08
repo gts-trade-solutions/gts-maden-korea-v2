@@ -80,24 +80,22 @@ export default function BannersAdminPage() {
 
   async function fetchList() {
     setLoading(true);
-    let query = supabase
-      .from("home_banners")
-      .select(
-        "id, alt, image_path, video_url, link_url, page_scope, position, active, starts_at, ends_at, country, created_at, updated_at"
-      )
-      .eq("page_scope", scope);
-
-    if (countryFilter !== "all") {
-      query = query.eq("country", countryFilter);
+    try {
+      const params = new URLSearchParams({ scope });
+      if (countryFilter !== "all") params.set("country", countryFilter);
+      const res = await fetch(`/api/admin/cms/banners?${params.toString()}`, {
+        credentials: "include",
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body?.ok) {
+        alert(body?.error || "Failed to load banners");
+        setBanners([]);
+      } else {
+        setBanners((body.banners ?? []) as Row[]);
+      }
+    } finally {
+      setLoading(false);
     }
-
-    const { data, error } = await query
-      .order("country", { ascending: true })
-      .order("position", { ascending: true });
-
-    if (error) alert(error.message);
-    setBanners((data ?? []) as Row[]);
-    setLoading(false);
   }
 
   useEffect(() => {

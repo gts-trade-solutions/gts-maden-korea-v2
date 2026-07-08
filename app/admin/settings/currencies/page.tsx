@@ -54,15 +54,15 @@ export default function CurrenciesAdminPage() {
   const [refreshing, setRefreshing] = useState(false);
 
   const load = async () => {
-    const { data, error } = await supabase
-      .from("currency_rates")
-      .select("*")
-      .order("code", { ascending: true });
-    if (error) {
-      toast.error(error.message);
+    const res = await fetch("/api/admin/settings/currencies", {
+      credentials: "include",
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || !body?.ok) {
+      toast.error(body?.error || "Failed to load currencies");
       return;
     }
-    setRows((data ?? []) as CurrencyRow[]);
+    setRows((body.rows ?? []) as CurrencyRow[]);
   };
 
   useEffect(() => {

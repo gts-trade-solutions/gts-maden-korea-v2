@@ -9,13 +9,15 @@
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
 import {
   asKind,
-  adminSupabase,
   getAdminOr401,
   json,
   KINDS,
 } from "../../_lib";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import {
   TARGET_LOCALES,
   namespaceHash,
@@ -25,30 +27,34 @@ import {
 
 type RouteParams = { params: { kind: string; id: string } };
 
-export async function GET(_req: Request, { params }: RouteParams) {
-  const { error } = await getAdminOr401();
+export async function GET(req: Request, { params }: RouteParams) {
+  const { error } = await getAdminOr401(req);
   if (error) return error;
 
   const kind = asKind(params.kind);
   if (!kind) return json({ ok: false, error: "BAD_KIND" }, 400);
   const cfg = KINDS[kind];
-  const sb = adminSupabase();
 
-  const [{ data: source, error: srcErr }, { data: rows, error: trErr }] =
-    await Promise.all([
-      sb
-        .from(cfg.sourceTable)
-        .select(cfg.sourceColumns.join(","))
-        .eq("id", params.id)
-        .maybeSingle(),
-      sb
-        .from(cfg.translationsTable)
-        .select("*")
-        .eq(cfg.fkColumn, params.id),
+  const sourceSelect = Object.fromEntries(
+    cfg.sourceColumns.map((c) => [c, true])
+  );
+
+  let source: Record<string, any> | null;
+  let rows: any[];
+  try {
+    [source, rows] = await Promise.all([
+      (prisma as any)[cfg.sourceTable].findUnique({
+        where: { id: params.id },
+        select: sourceSelect,
+      }) as Promise<Record<string, any> | null>,
+      (prisma as any)[cfg.translationsTable].findMany({
+        where: { [cfg.fkColumn]: params.id },
+      }) as Promise<any[]>,
     ]);
+  } catch (e: any) {
+    return json({ ok: false, error: e?.message || "READ_FAILED" }, 500);
+  }
 
-  if (srcErr) return json({ ok: false, error: srcErr.message }, 500);
-  if (trErr) return json({ ok: false, error: trErr.message }, 500);
   if (!source) return json({ ok: false, error: "ENTITY_NOT_FOUND" }, 404);
 
   // Compute the current source hash and tag each translation row with
@@ -81,14 +87,14 @@ export async function GET(_req: Request, { params }: RouteParams) {
     kind,
     locales: [...TARGET_LOCALES],
     translatableFields: [...cfg.translatableFields],
-    source,
+    source: jsonSafe(source),
     currentSourceHash,
-    translations: translationsWithStale,
+    translations: jsonSafe(translationsWithStale),
   });
 }
 
 export async function PATCH(req: Request, { params }: RouteParams) {
-  const { error } = await getAdminOr401();
+  const { error } = await getAdminOr401(req);
   if (error) return error;
 
   const kind = asKind(params.kind);
@@ -114,41 +120,44 @@ export async function PATCH(req: Request, { params }: RouteParams) {
   if (Object.keys(allowed).length === 0)
     return json({ ok: false, error: "NO_FIELDS" }, 400);
 
-  const sb = adminSupabase();
-  const upsertRow = {
-    [cfg.fkColumn]: params.id,
-    locale,
-    ...allowed,
-    source: "human",
-    updated_at: new Date().toISOString(),
-  };
-
   // We deliberately do NOT touch source_hash on a human edit. That
   // way if the admin later re-publishes the underlying English row,
   // the hash will differ from what an AI run would produce, but the
   // `source = 'human'` flag already shields this row from the
   // script. The hash is left as whatever the AI row had so we can
   // still tell "this locale was edited against snapshot X".
-  const { error: upErr } = await sb
-    .from(cfg.translationsTable)
-    .upsert(upsertRow, { onConflict: `${cfg.fkColumn},locale` });
-  if (upErr) return json({ ok: false, error: upErr.message }, 500);
-
-  // Dual-write: mirror this entity's translations into MySQL (the storefront
-  // reads localized PDP/listing/brand/category copy from MySQL). Self-guards
-  // for kinds not in the mirror allowlist (e.g. banners).
+  //
+  // Upsert keyed on the (fk, locale) compound unique. The id column is
+  // Char(36) with no default, so a fresh row needs a generated UUID.
+  const now = new Date();
   try {
-    const { mirrorTableToMysql } = await import("@/lib/data/mirror");
-    await mirrorTableToMysql(cfg.translationsTable, params.id);
-  } catch (e) {
-    console.error("[dual-write] content-translation MySQL mirror failed:", e);
+    await (prisma as any)[cfg.translationsTable].upsert({
+      where: {
+        [`${cfg.fkColumn}_locale`]: { [cfg.fkColumn]: params.id, locale },
+      },
+      create: {
+        id: randomUUID(),
+        [cfg.fkColumn]: params.id,
+        locale,
+        ...allowed,
+        source: "human",
+        updated_at: now,
+      },
+      update: {
+        ...allowed,
+        source: "human",
+        updated_at: now,
+      },
+    });
+  } catch (e: any) {
+    return json({ ok: false, error: e?.message || "WRITE_FAILED" }, 500);
   }
 
   return json({ ok: true });
 }
 
 export async function DELETE(req: Request, { params }: RouteParams) {
-  const { error } = await getAdminOr401();
+  const { error } = await getAdminOr401(req);
   if (error) return error;
 
   const kind = asKind(params.kind);
@@ -160,21 +169,13 @@ export async function DELETE(req: Request, { params }: RouteParams) {
   if (!(TARGET_LOCALES as readonly string[]).includes(locale))
     return json({ ok: false, error: "BAD_LOCALE" }, 400);
 
-  const sb = adminSupabase();
-  const { error: delErr } = await sb
-    .from(cfg.translationsTable)
-    .delete()
-    .eq(cfg.fkColumn, params.id)
-    .eq("locale", locale);
-  if (delErr) return json({ ok: false, error: delErr.message }, 500);
-
-  // Dual-write: re-sync this entity's translations into MySQL so the locale
-  // delete propagates (scoped re-sync drops the removed row).
+  // deleteMany tolerates a missing row (revert-to-fallback is idempotent).
   try {
-    const { mirrorTableToMysql } = await import("@/lib/data/mirror");
-    await mirrorTableToMysql(cfg.translationsTable, params.id);
-  } catch (e) {
-    console.error("[dual-write] content-translation MySQL mirror failed:", e);
+    await (prisma as any)[cfg.translationsTable].deleteMany({
+      where: { [cfg.fkColumn]: params.id, locale },
+    });
+  } catch (e: any) {
+    return json({ ok: false, error: e?.message || "DELETE_FAILED" }, 500);
   }
 
   return NextResponse.json({ ok: true });

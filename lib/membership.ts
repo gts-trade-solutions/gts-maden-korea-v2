@@ -1,5 +1,3 @@
-import { createClient } from "@supabase/supabase-js";
-
 export const MEMBERSHIP_PLAN_CODE = "k_plus";
 export const MEMBERSHIP_PLAN_NAME = "K-Plus";
 export const MEMBERSHIP_PRICE = 199;
@@ -35,12 +33,6 @@ export type MembershipRow = {
   starts_at?: string;
   ends_at: string;
 };
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  { auth: { persistSession: true, autoRefreshToken: true } }
-);
 
 export function hasActiveMembership(
   membership?: Pick<MembershipRow, "status" | "ends_at"> | null
@@ -103,19 +95,30 @@ export async function syncMembershipStatus(userId: string) {
 export async function getActiveMembership(userId: string) {
   await syncMembershipStatus(userId);
 
-  const { data, error } = await supabase
-    .from("user_memberships")
-    .select("id, user_id, plan_code, plan_name, amount, duration_days, status, starts_at, ends_at")
-    .eq("user_id", userId)
-    .eq("status", "active")
-    .gt("ends_at", new Date().toISOString())
-    .order("ends_at", { ascending: false })
-    .limit(1)
-    .maybeSingle<MembershipRow>();
+  // Prisma is server-only; import dynamically so this module stays safe to
+  // import from client components (which use the shipping helpers above).
+  const { prisma } = await import("@/lib/db/prisma");
+  const { jsonSafe } = await import("@/lib/db/serialize");
 
-  if (error) {
-    throw error;
-  }
+  const data = await prisma.user_memberships.findFirst({
+    where: {
+      user_id: userId,
+      status: "active",
+      ends_at: { gt: new Date() },
+    },
+    orderBy: { ends_at: "desc" },
+    select: {
+      id: true,
+      user_id: true,
+      plan_code: true,
+      plan_name: true,
+      amount: true,
+      duration_days: true,
+      status: true,
+      starts_at: true,
+      ends_at: true,
+    },
+  });
 
-  return data ?? null;
+  return data ? (jsonSafe(data) as MembershipRow) : null;
 }

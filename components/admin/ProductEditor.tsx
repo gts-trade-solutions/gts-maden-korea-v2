@@ -210,43 +210,69 @@ export function ProductEditor({
       if (cancelled) return;
       setVendor(v);
 
-      const [br, cat] = await Promise.all([
-        supabase.from("brands").select("id,slug,name").order("name", { ascending: true }),
-        supabase.from("categories").select("id,slug,name").order("name", { ascending: true }),
-      ]);
-      if (!cancelled) {
-        setBrands((br.data as any[]) || []);
-        setCategories((cat.data as any[]) || []);
+      // Create mode needs only the brand/category lists; edit mode pulls the
+      // product + images from the same MySQL catalog route (which also bundles
+      // the lists). Both come from /api/admin/catalog/products.
+      if (mode !== "edit" || !productId) {
+        const res = await fetch("/api/admin/catalog/products", { credentials: "include" });
+        const payload = await res.json().catch(() => ({} as any));
+        if (!cancelled) {
+          setBrands((payload.brands as any[]) || []);
+          setCategories((payload.categories as any[]) || []);
+        }
       }
 
       if (mode === "edit" && productId) {
-        // Only load product owned by this vendor
-        const { data: prod, error: perr } = await supabase
-          .from("products")
-          .select("*")
-          .eq("id", productId)
-          .eq("vendor_id", v.id)
-          .maybeSingle();
+        // Load the product (+ images + brand/category lists) from MySQL. The
+        // admin route returns HIDDEN rows too, unlike the RLS-scoped anon
+        // client the old query used.
+        const res = await fetch(
+          `/api/admin/catalog/products?id=${encodeURIComponent(productId)}`,
+          { credentials: "include" }
+        );
+        const payload = await res.json().catch(() => ({} as any));
+        if (cancelled) return;
+        if (!res.ok || !payload?.ok || !payload?.product) {
+          if (res.status === 404 || payload?.error === "NOT_FOUND") {
+            toast.error("Product not found");
+            router.replace("/vendor/products");
+            return;
+          }
+          toast.error(payload?.error || "Failed to load product");
+          return;
+        }
+        setBrands((payload.brands as any[]) || []);
+        setCategories((payload.categories as any[]) || []);
 
-        if (perr) { toast.error(perr.message); return; }
-        if (!prod) { toast.error("Product not found"); router.replace("/vendor/products"); return; }
+        const prod = payload.product as any;
+        // Preserve the vendor-ownership guard the old query enforced via
+        // `.eq("vendor_id", v.id)` — a product owned by another vendor is
+        // surfaced as "not found".
+        if (prod.vendor_id !== v.id) {
+          toast.error("Product not found");
+          router.replace("/vendor/products");
+          return;
+        }
 
-        // Load gallery images
-        const { data: imgs } = await supabase
-          .from("product_images")
-          .select("id, storage_path, alt, sort_order")
-          .eq("product_id", productId)
-          .order("sort_order", { ascending: true });
+        // Gallery images arrive with the product payload.
+        const imgs = (payload.images ?? []) as any[];
 
-        // Load gallery videos (new multi-video table). Legacy single
-        // video on `products.video_path` is still surfaced as the
-        // `video_path` field below for backward compatibility, but
-        // new uploads go through this list.
-        const { data: vids } = await supabase
-          .from("product_videos")
-          .select("id, storage_path, alt, sort_order")
-          .eq("product_id", productId)
-          .order("sort_order", { ascending: true });
+        // Load gallery videos (new multi-video table) from its own MySQL
+        // route. Legacy single video on `products.video_path` is still
+        // surfaced as the `video_path` field below for backward
+        // compatibility, but new uploads go through this list.
+        let vids: any[] = [];
+        try {
+          const vres = await fetch(
+            `/api/admin/catalog/product-videos?product_id=${encodeURIComponent(productId)}`,
+            { credentials: "include" }
+          );
+          const vbody = await vres.json().catch(() => ({} as any));
+          if (vres.ok && vbody?.ok) vids = vbody.videos ?? [];
+        } catch {
+          // Non-fatal — the editor still loads without the gallery videos.
+        }
+        if (cancelled) return;
 
         setModel((m) => ({
           ...m,
@@ -498,11 +524,12 @@ export function ProductEditor({
         // Capture storage paths BEFORE deleting (rows are gone after delete).
         let imgPaths: string[] = [];
         if (deleteMediaFromStorage) {
-          const { data: gone } = await supabase
-            .from("product_images")
-            .select("storage_path")
-            .in("id", toDeleteImgIds);
-          imgPaths = (gone ?? []).map((g: any) => g.storage_path);
+          const res = await fetch(
+            `/api/admin/catalog/media-paths?table=product_images&ids=${encodeURIComponent(toDeleteImgIds.join(","))}`,
+            { credentials: "include" },
+          );
+          const j = await res.json().catch(() => ({}));
+          imgPaths = (j?.paths ?? []) as string[];
         }
 
         for (const delId of toDeleteImgIds) {
@@ -610,11 +637,12 @@ export function ProductEditor({
         // Best-effort: also drop the storage blobs if the admin asked
         // for media cleanup.
         if (deleteMediaFromStorage) {
-          const { data: goneVid } = await supabase
-            .from("product_videos")
-            .select("storage_path")
-            .in("id", toDeleteVidIds);
-          const paths = (goneVid ?? []).map((g: any) => g.storage_path);
+          const res = await fetch(
+            `/api/admin/catalog/media-paths?table=product_videos&ids=${encodeURIComponent(toDeleteVidIds.join(","))}`,
+            { credentials: "include" },
+          );
+          const j = await res.json().catch(() => ({}));
+          const paths = (j?.paths ?? []) as string[];
           for (const p of paths) {
             if (p) await deleteMedia(bucket, p);
           }

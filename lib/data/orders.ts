@@ -2,7 +2,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db/prisma";
 import { recalcCartTotalsMysql } from "@/lib/data/cart";
-import { effectivePriceForCountry, fetchCountryOffers } from "@/lib/pricing";
+import { effectivePriceForCountry } from "@/lib/pricing";
 import { roundMoney } from "@/lib/currency";
 
 // Reprice a user's cart_items to the CURRENT effective price before an order
@@ -13,64 +13,43 @@ import { roundMoney } from "@/lib/currency";
 // row) can differ from the displayed total. This refreshes unit_price/line_total
 // using the SAME resolver calc-totals uses, so the order == the displayed total.
 //
-// Runs against Supabase via the service-role admin client (writes the
-// authoritative cart that create_order_from_cart reads), scoped to the user's
-// own cart. Best-effort: on any failure the caller proceeds with the snapshot
-// (today's behavior), so this can never block a checkout.
+// Runs against MySQL via Prisma (writes the authoritative cart that the order
+// build reads), scoped to the user's own cart. Best-effort: on any failure the
+// caller proceeds with the snapshot (today's behavior), so this can never block
+// a checkout.
 export async function repriceCartToLive(
   userId: string,
   country: string
 ): Promise<{ changed: number }> {
-  const { createAdminClient } = await import("@/lib/supabaseAdmin");
-  const admin = createAdminClient();
-
-  const { data: cart } = await admin
-    .from("carts")
-    .select("id")
-    .eq("user_id", userId)
-    .maybeSingle();
+  const cart = await prisma.carts.findUnique({ where: { user_id: userId }, select: { id: true } });
   if (!cart) return { changed: 0 };
 
-  const { data: items } = await admin
-    .from("cart_items")
-    .select("id, product_id, quantity, unit_price, line_total")
-    .eq("cart_id", cart.id);
-  if (!items?.length) return { changed: 0 };
+  const items = await prisma.cart_items.findMany({
+    where: { cart_id: cart.id },
+    select: { id: true, product_id: true, quantity: true, unit_price: true, line_total: true },
+  });
+  if (!items.length) return { changed: 0 };
 
-  const productIds = Array.from(new Set(items.map((i: any) => i.product_id)));
-  const useMysql = process.env.CATALOG_BACKEND === "mysql";
+  const productIds = Array.from(new Set(items.map((i) => i.product_id).filter(Boolean) as string[]));
 
   // Live price fields + country offers — same source calc-totals reads.
-  let products: any[];
-  let offers: Record<string, number>;
-  if (useMysql) {
-    const { getCheckoutProductsMysql } = await import("@/lib/data/checkout");
-    const { fetchCountryOffersMysql } = await import("@/lib/data/catalog");
-    products = await getCheckoutProductsMysql(productIds);
-    offers = await fetchCountryOffersMysql(productIds, country);
-  } else {
-    const { data } = await admin
-      .from("products")
-      .select("id, price, sale_price, sale_starts_at, sale_ends_at")
-      .in("id", productIds);
-    products = data ?? [];
-    offers = await fetchCountryOffers(productIds, country, admin);
-  }
-  const prodMap = new Map(products.map((p: any) => [p.id, p]));
+  const { getCheckoutProductsMysql } = await import("@/lib/data/checkout");
+  const { fetchCountryOffersMysql } = await import("@/lib/data/catalog");
+  const products = await getCheckoutProductsMysql(productIds);
+  const offers = await fetchCountryOffersMysql(productIds, country);
+  const prodMap = new Map((products as any[]).map((p) => [p.id, p]));
 
   let changed = 0;
-  for (const it of items as any[]) {
-    const p = prodMap.get(it.product_id);
-    if (!p) continue; // product vanished — leave the snapshot, RPC still copies it
+  for (const it of items) {
+    const p = it.product_id ? prodMap.get(it.product_id) : null;
+    if (!p) continue; // product vanished — leave the snapshot
     const unit = roundMoney(effectivePriceForCountry(p, offers));
     const line = roundMoney(unit * Number(it.quantity));
     if (Number(it.unit_price) === unit && Number(it.line_total) === line) continue;
-    const { error } = await admin
-      .from("cart_items")
-      .update({ unit_price: unit, line_total: line })
-      .eq("id", it.id);
-    if (!error) changed++;
+    await prisma.cart_items.update({ where: { id: it.id }, data: { unit_price: unit, line_total: line } });
+    changed++;
   }
+  await recalcCartTotalsMysql(cart.id);
   return { changed };
 }
 

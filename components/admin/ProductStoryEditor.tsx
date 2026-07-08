@@ -117,9 +117,6 @@ import {
 } from "@/lib/types/productStory";
 import type { CaptionMode, TextWeight } from "@/lib/types/productStory";
 
-const SELECT_COLUMNS =
-  "id, product_id, position, block_type, size, mode, headline, body, text_position, text_color, text_bg, text_size, text_weight, caption_mode, caption_backdrop, split_direction, image_path, image_alt, image_focal_x, image_focal_y, image_fit, image_zoom, image_bg, caption, stats_items, before_image_path, after_image_path, comparison_caption, created_at, updated_at";
-
 const MAX_UPLOAD_BYTES = 4 * 1024 * 1024; // 4 MB
 
 type Props = { productId: string };
@@ -295,19 +292,36 @@ function Editor({ productId }: Props) {
     let cancelled = false;
     setLoading(true);
     (async () => {
-      const { data, error } = await supabase
-        .from("product_story_blocks")
-        .select(SELECT_COLUMNS)
-        .eq("product_id", productId)
-        .order("position", { ascending: true });
+      let list: StoryBlock[] = [];
+      let failed = false;
+      try {
+        const res = await fetch(
+          `/api/admin/story-blocks?product_id=${encodeURIComponent(productId)}`,
+          { credentials: "include" }
+        );
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !body?.ok) {
+          failed = true;
+          if (!cancelled)
+            toast.error(
+              `Failed to load Discover blocks: ${body?.error || "read failed"}`
+            );
+        } else {
+          list = (body.blocks ?? []) as StoryBlock[];
+        }
+      } catch (e: any) {
+        failed = true;
+        if (!cancelled)
+          toast.error(
+            `Failed to load Discover blocks: ${e?.message || String(e)}`
+          );
+      }
 
       if (cancelled) return;
-      if (error) {
-        toast.error(`Failed to load Discover blocks: ${error.message}`);
+      if (failed) {
         setBlocks([]);
         setServerSnapshot({});
       } else {
-        const list = (data ?? []) as StoryBlock[];
         setBlocks(list);
         setServerSnapshot(
           Object.fromEntries(list.map((b) => [b.id, b])) as Record<

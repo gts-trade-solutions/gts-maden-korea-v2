@@ -14,7 +14,7 @@
 // no RLS policies (server-only access by design).
 
 import crypto from "crypto";
-import { createServiceClient } from "@/lib/supabaseServer";
+import { prisma } from "@/lib/db/prisma";
 
 // 24-hour token expiry. Long enough that someone checking email later in
 // the day still has a valid link; short enough that abandoned links don't
@@ -41,12 +41,12 @@ export type EmailVerificationConfig = {
 };
 
 export async function getEmailVerificationConfig(): Promise<EmailVerificationConfig> {
-  const sb = createServiceClient();
-  const { data } = await sb
-    .from("store_settings")
-    .select("email_verification_grace_days, email_verification_lockout_days")
-    .eq("id", 1)
-    .maybeSingle();
+  const data = await prisma.store_settings.findFirst({
+    select: {
+      email_verification_grace_days: true,
+      email_verification_lockout_days: true,
+    },
+  });
   return {
     graceDays:
       Number(data?.email_verification_grace_days) > 0
@@ -91,11 +91,10 @@ export type EmailVerificationStatus = {
  * regardless of email_verified_at — staff bypass.
  */
 /**
- * Backend-aware profile read for verification. Under AUTH_BACKEND=nextauth the
- * authoritative user/profile lives in MySQL (esp. OAuth users, who have no
- * Supabase profiles row), so read it there — otherwise the gate can't see them
- * and they drift into the grace→lockout countdown despite a verified email.
- * Returns the Supabase row shape (ISO strings / nulls) the caller expects.
+ * Profile read for verification. The authoritative user/profile lives in
+ * MySQL (esp. OAuth users), so read it there — otherwise the gate can't see
+ * them and they drift into the grace→lockout countdown despite a verified
+ * email. Returns the row shape (ISO strings / nulls) the caller expects.
  */
 async function readVerificationProfile(userId: string): Promise<{
   id: string;
@@ -104,41 +103,25 @@ async function readVerificationProfile(userId: string): Promise<{
   email_verification_grace_starts_at: string | null;
   email_verification_deadline_override: string | null;
 } | null> {
-  if (process.env.AUTH_BACKEND === "nextauth") {
-    try {
-      const { prisma } = await import("@/lib/db/prisma");
-      const p = await prisma.profiles.findUnique({
-        where: { id: userId },
-        select: {
-          id: true,
-          role: true,
-          email_verified_at: true,
-          email_verification_grace_starts_at: true,
-          email_verification_deadline_override: true,
-        },
-      });
-      if (!p) return null;
-      const iso = (d: Date | null) => (d ? d.toISOString() : null);
-      return {
-        id: p.id,
-        role: (p.role as string) ?? null,
-        email_verified_at: iso(p.email_verified_at as Date | null),
-        email_verification_grace_starts_at: iso(p.email_verification_grace_starts_at as Date | null),
-        email_verification_deadline_override: iso(p.email_verification_deadline_override as Date | null),
-      };
-    } catch (e) {
-      console.error("[email-verify] MySQL profile read failed, falling back to Supabase:", e);
-    }
-  }
-  const sb = createServiceClient();
-  const { data } = await sb
-    .from("profiles")
-    .select(
-      "id, role, email_verified_at, email_verification_grace_starts_at, email_verification_deadline_override"
-    )
-    .eq("id", userId)
-    .maybeSingle();
-  return (data as any) ?? null;
+  const p = await prisma.profiles.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      role: true,
+      email_verified_at: true,
+      email_verification_grace_starts_at: true,
+      email_verification_deadline_override: true,
+    },
+  });
+  if (!p) return null;
+  const iso = (d: Date | null) => (d ? d.toISOString() : null);
+  return {
+    id: p.id,
+    role: (p.role as string) ?? null,
+    email_verified_at: iso(p.email_verified_at as Date | null),
+    email_verification_grace_starts_at: iso(p.email_verification_grace_starts_at as Date | null),
+    email_verification_deadline_override: iso(p.email_verification_deadline_override as Date | null),
+  };
 }
 
 export async function getEmailVerificationStatus(
@@ -248,7 +231,6 @@ export async function issueVerificationToken(opts: {
   userId: string;
   email: string;
 }): Promise<{ token: string; expiresAt: Date }> {
-  const sb = createServiceClient();
   const token = generateToken();
   const tokenHash = hashToken(token);
   const now = new Date();
@@ -256,20 +238,20 @@ export async function issueVerificationToken(opts: {
 
   // Invalidate older outstanding tokens for this user. The next click on
   // any older link gets "expired" instead of working.
-  await sb
-    .from("email_verification_tokens")
-    .update({ used_at: now.toISOString() })
-    .eq("user_id", opts.userId)
-    .is("used_at", null);
-
-  const { error } = await sb.from("email_verification_tokens").insert({
-    user_id: opts.userId,
-    email: opts.email.toLowerCase(),
-    token_hash: tokenHash,
-    expires_at: expiresAt.toISOString(),
+  await prisma.email_verification_tokens.updateMany({
+    where: { user_id: opts.userId, used_at: null },
+    data: { used_at: now },
   });
 
-  if (error) throw error;
+  await prisma.email_verification_tokens.create({
+    data: {
+      id: crypto.randomUUID(),
+      user_id: opts.userId,
+      email: opts.email.toLowerCase(),
+      token_hash: tokenHash,
+      expires_at: expiresAt,
+    },
+  });
 
   return { token, expiresAt };
 }
@@ -286,24 +268,22 @@ export type VerifyTokenResult =
 export async function consumeVerificationToken(
   rawToken: string
 ): Promise<VerifyTokenResult> {
-  const sb = createServiceClient();
   const tokenHash = hashToken(rawToken);
 
-  const { data: row } = await sb
-    .from("email_verification_tokens")
-    .select("id, user_id, email, expires_at, used_at")
-    .eq("token_hash", tokenHash)
-    .maybeSingle();
+  const row = await prisma.email_verification_tokens.findFirst({
+    where: { token_hash: tokenHash },
+    select: { id: true, user_id: true, email: true, expires_at: true, used_at: true },
+  });
 
   if (!row) return { ok: false, reason: "not_found" };
   if (row.used_at) return { ok: false, reason: "used" };
-  if (new Date(row.expires_at as string).getTime() < Date.now())
+  if (new Date(row.expires_at).getTime() < Date.now())
     return { ok: false, reason: "expired" };
 
-  await sb
-    .from("email_verification_tokens")
-    .update({ used_at: new Date().toISOString() })
-    .eq("id", row.id);
+  await prisma.email_verification_tokens.update({
+    where: { id: row.id },
+    data: { used_at: new Date() },
+  });
 
   return {
     ok: true,
@@ -316,23 +296,12 @@ export async function consumeVerificationToken(
  * Mark a user as verified. Idempotent — running twice is harmless.
  */
 export async function markUserVerified(userId: string): Promise<void> {
-  const sb = createServiceClient();
-  await sb
-    .from("profiles")
-    .update({ email_verified_at: new Date().toISOString() })
-    .eq("id", userId);
-
-  // Dual-write: the NextAuth verification gate reads email_verified_at from
-  // MySQL, so a Supabase-only update would leave the user "unverified" there.
-  try {
-    const { prisma } = await import("@/lib/db/prisma");
-    await prisma.profiles.updateMany({
-      where: { id: userId },
-      data: { email_verified_at: new Date() },
-    });
-  } catch (e) {
-    console.error("[email-verify] MySQL mark-verified mirror failed:", e);
-  }
+  // updateMany tolerates a missing profiles row (Prisma update would throw
+  // P2025). The NextAuth verification gate reads email_verified_at from here.
+  await prisma.profiles.updateMany({
+    where: { id: userId },
+    data: { email_verified_at: new Date() },
+  });
 }
 
 /**
@@ -345,12 +314,9 @@ export async function canResendVerification(
   userId: string,
   windowSeconds = 60
 ): Promise<boolean> {
-  const sb = createServiceClient();
-  const cutoff = new Date(Date.now() - windowSeconds * 1000).toISOString();
-  const { count } = await sb
-    .from("email_verification_tokens")
-    .select("id", { count: "exact", head: true })
-    .eq("user_id", userId)
-    .gte("created_at", cutoff);
-  return (count ?? 0) === 0;
+  const cutoff = new Date(Date.now() - windowSeconds * 1000);
+  const count = await prisma.email_verification_tokens.count({
+    where: { user_id: userId, created_at: { gte: cutoff } },
+  });
+  return count === 0;
 }

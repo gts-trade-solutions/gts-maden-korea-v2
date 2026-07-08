@@ -55,16 +55,15 @@ export default function CategoriesManagementPage() {
 
   async function loadCategories() {
     setLoading(true);
-    const { data, error } = await supabase
-      .from('categories')
-      .select('id, slug, name, description, created_at')
-      .order('created_at', { ascending: false });
-    if (error) {
+    try {
+      const res = await fetch('/api/admin/cms/categories', { credentials: 'include' });
+      const j = await res.json();
+      if (!res.ok || !j?.ok) throw new Error(j?.error || 'load failed');
+      setCategories(j.categories ?? []);
+    } catch (error) {
       toast.error('Failed to load categories');
       console.error(error);
       setCategories([]);
-    } else {
-      setCategories(data ?? []);
     }
     setLoading(false);
   }

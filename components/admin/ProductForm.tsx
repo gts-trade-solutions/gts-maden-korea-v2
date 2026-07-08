@@ -2,7 +2,6 @@
 
 import React, { useMemo, useState } from "react";
 import * as XLSX from "xlsx";
-import { supabase } from "@/lib/supabaseClient";
 import { uploadMedia } from "@/lib/storage/upload-client";
 import { adminWrite } from "@/lib/admin/catalog-write";
 
@@ -257,12 +256,11 @@ export function ProductForm() {
   /* ── Template (single sheet) ── */
 // npm i exceljs
 async function bulkDownloadTemplate() {
-  const [{ data: brands }, { data: categories }] = await Promise.all([
-    supabase.from("brands").select("slug").order("slug", { ascending: true }),
-    supabase.from("categories").select("slug").order("slug", { ascending: true }),
-  ]);
-  const brandSlugs = (brands ?? []).map(b => b.slug).filter(Boolean);
-  const categorySlugs = (categories ?? []).map(c => c.slug).filter(Boolean);
+  // Brand/category slugs come from MySQL via the admin catalog route.
+  const lookupRes = await fetch("/api/admin/catalog/products", { credentials: "include" });
+  const lookupBody = await lookupRes.json().catch(() => ({} as any));
+  const brandSlugs = ((lookupBody.brands ?? []) as any[]).map((b) => b.slug).filter(Boolean).sort();
+  const categorySlugs = ((lookupBody.categories ?? []) as any[]).map((c) => c.slug).filter(Boolean).sort();
 
   const ExcelJS = (await import("exceljs")).default;
   const wb = new ExcelJS.Workbook();
@@ -559,10 +557,25 @@ async function bulkDownloadTemplate() {
       const genSkus = autoSkuRowIdx
         .map((ri) => products[ri].sku!)
         .filter(Boolean);
-      const { data: usedDbSkus, error } = await supabase
-        .from("products")
-        .select("sku")
-        .in("sku", genSkus);
+      // Which auto-generated SKUs already exist in MySQL? Pull the catalog
+      // list (returns every product's sku) and intersect with genSkus.
+      let usedDbSkus: { sku: string }[] = [];
+      let error: any = null;
+      try {
+        const skuRes = await fetch("/api/admin/catalog/products", { credentials: "include" });
+        const skuBody = await skuRes.json().catch(() => ({} as any));
+        if (!skuRes.ok || !skuBody?.ok) {
+          error = skuBody?.error || "read failed";
+        } else {
+          const wanted = new Set(genSkus.map((s) => s.toUpperCase()));
+          usedDbSkus = ((skuBody.products ?? []) as any[])
+            .map((p) => p.sku)
+            .filter((s: any) => s && wanted.has(String(s).toUpperCase()))
+            .map((sku: string) => ({ sku }));
+        }
+      } catch (e: any) {
+        error = e?.message || String(e);
+      }
 
       if (!error && usedDbSkus?.length) {
         const dbSet = new Set<string>(
@@ -629,12 +642,10 @@ async function bulkDownloadTemplate() {
         issues.push(`'${label}': category_slug is required`);
     }
 
-    const [brandRes, catRes] = await Promise.all([
-      supabase.from("brands").select("slug"),
-      supabase.from("categories").select("slug"),
-    ]);
-    const brandSet = new Set((brandRes.data ?? []).map((b: any) => b.slug));
-    const catSet = new Set((catRes.data ?? []).map((c: any) => c.slug));
+    const lookupRes = await fetch("/api/admin/catalog/products", { credentials: "include" });
+    const lookupBody = await lookupRes.json().catch(() => ({} as any));
+    const brandSet = new Set(((lookupBody.brands ?? []) as any[]).map((b) => b.slug));
+    const catSet = new Set(((lookupBody.categories ?? []) as any[]).map((c) => c.slug));
 
     for (const p of bulkProducts) {
       const label = p.slug || p.sku || p.name || "(unnamed)";
@@ -750,15 +761,21 @@ async function bulkDownloadTemplate() {
     setBulkProgress(80);
 
     try {
-      // 1) Dictionaries: map brand/category slugs -> ids
-      const [{ data: catRows, error: catErr }, { data: brRows, error: brErr }] =
-        await Promise.all([
-          supabase.from("categories").select("id,slug"),
-          supabase.from("brands").select("id,slug"),
-        ]);
-
-      if (catErr) issues.push(`Failed to load categories: ${catErr.message}`);
-      if (brErr) issues.push(`Failed to load brands: ${brErr.message}`);
+      // 1) Dictionaries: map brand/category slugs -> ids (MySQL via catalog route)
+      let catRows: any[] = [];
+      let brRows: any[] = [];
+      try {
+        const lookupRes = await fetch("/api/admin/catalog/products", { credentials: "include" });
+        const lookupBody = await lookupRes.json().catch(() => ({} as any));
+        if (!lookupRes.ok || !lookupBody?.ok) {
+          issues.push(`Failed to load brands/categories: ${lookupBody?.error || "read failed"}`);
+        } else {
+          catRows = lookupBody.categories ?? [];
+          brRows = lookupBody.brands ?? [];
+        }
+      } catch (e: any) {
+        issues.push(`Failed to load brands/categories: ${e?.message || String(e)}`);
+      }
 
       const catMap = new Map<string, string>(
         (catRows ?? []).map((c: any) => [c.slug, c.id])

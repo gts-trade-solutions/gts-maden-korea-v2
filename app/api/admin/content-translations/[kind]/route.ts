@@ -14,11 +14,12 @@ export const dynamic = "force-dynamic";
 
 import {
   asKind,
-  adminSupabase,
   getAdminOr401,
   json,
   KINDS,
 } from "../_lib";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import {
   TARGET_LOCALES,
   namespaceHash,
@@ -28,7 +29,7 @@ import {
 type RouteParams = { params: { kind: string } };
 
 export async function GET(req: Request, { params }: RouteParams) {
-  const { error } = await getAdminOr401();
+  const { error } = await getAdminOr401(req);
   if (error) return error;
 
   const kind = asKind(params.kind);
@@ -39,8 +40,6 @@ export async function GET(req: Request, { params }: RouteParams) {
   const q = (searchParams.get("q") ?? "").trim();
   const limit = Math.min(Number(searchParams.get("limit") ?? 50) || 50, 200);
   const offset = Math.max(Number(searchParams.get("offset") ?? 0) || 0, 0);
-
-  const sb = adminSupabase();
 
   // Pick the canonical display column. Brand/product/category have
   // `name`; banners use `alt` since title is optional.
@@ -57,24 +56,36 @@ export async function GET(req: Request, { params }: RouteParams) {
   // entity. Translatable fields are usually under 5KB total per row
   // (product descriptions are the longest), so reading them at list
   // time is cheap at page sizes of 25–50.
-  const selectCols = ["id", "slug", displayCol, ...cfg.translatableFields]
-    .filter((c, i, arr) => arr.indexOf(c) === i) // dedupe in case displayCol overlaps
-    .join(", ");
+  // home_banners has no `slug` column — only select it for kinds that do,
+  // so Prisma doesn't reject the query. Item mapping already falls back to
+  // slug: null when absent.
+  const hasSlug = kind !== "banners";
+  const selectCols = ["id", ...(hasSlug ? ["slug"] : []), displayCol, ...cfg.translatableFields]
+    .filter((c, i, arr) => arr.indexOf(c) === i); // dedupe in case displayCol overlaps
+  const select = Object.fromEntries(selectCols.map((c) => [c, true]));
 
-  let sourceQ = sb
-    .from(cfg.sourceTable)
-    .select(selectCols, { count: "exact" });
+  const where = {
+    ...(cfg.sourceFilter ?? {}),
+    ...(q ? { [displayCol]: { contains: q } } : {}),
+  };
 
-  if (cfg.sourceFilter) {
-    for (const [k, v] of Object.entries(cfg.sourceFilter)) {
-      sourceQ = sourceQ.eq(k, v as any);
-    }
+  const sourceModel = (prisma as any)[cfg.sourceTable];
+  let rows: any[];
+  let count: number;
+  try {
+    [rows, count] = await Promise.all([
+      sourceModel.findMany({
+        where,
+        select,
+        orderBy: { [displayCol]: "asc" },
+        skip: offset,
+        take: limit,
+      }) as Promise<any[]>,
+      sourceModel.count({ where }) as Promise<number>,
+    ]);
+  } catch (e: any) {
+    return json({ ok: false, error: e?.message || "READ_FAILED" }, 500);
   }
-  if (q) sourceQ = sourceQ.ilike(displayCol, `%${q}%`);
-  sourceQ = sourceQ.order(displayCol, { ascending: true }).range(offset, offset + limit - 1);
-
-  const { data: rows, count, error: srcErr } = await sourceQ;
-  if (srcErr) return json({ ok: false, error: srcErr.message }, 500);
 
   const ids = (rows ?? []).map((r: any) => r.id);
   if (ids.length === 0) {
@@ -90,11 +101,21 @@ export async function GET(req: Request, { params }: RouteParams) {
   // these rows in one query so we can compute per-locale status +
   // staleness without N round trips. Cast — see coverage route
   // comment for why TS chokes here.
-  const { data: trRows, error: trErr } = (await sb
-    .from(cfg.translationsTable)
-    .select(`${cfg.fkColumn}, locale, source, source_hash, updated_at`)
-    .in(cfg.fkColumn, ids)) as { data: any[] | null; error: any };
-  if (trErr) return json({ ok: false, error: trErr.message }, 500);
+  let trRows: any[];
+  try {
+    trRows = (await (prisma as any)[cfg.translationsTable].findMany({
+      where: { [cfg.fkColumn]: { in: ids } },
+      select: {
+        [cfg.fkColumn]: true,
+        locale: true,
+        source: true,
+        source_hash: true,
+        updated_at: true,
+      },
+    })) as any[];
+  } catch (e: any) {
+    return json({ ok: false, error: e?.message || "READ_FAILED" }, 500);
+  }
 
   // Compute current source hashes once per entity. We need these to
   // mark rows stale where the stored source_hash no longer matches
@@ -150,6 +171,6 @@ export async function GET(req: Request, { params }: RouteParams) {
     ok: true,
     total: count ?? 0,
     locales: [...TARGET_LOCALES],
-    items,
+    items: jsonSafe(items),
   });
 }
