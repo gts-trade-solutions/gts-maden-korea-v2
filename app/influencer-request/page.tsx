@@ -73,31 +73,18 @@ export default function PartnerProgramPage() {
     (async () => {
       const country = readCountryFromCookie();
 
-      // 1) Try the visitor's country.
-      const { data: own } = await supabase
-        .from("k_partnership_videos")
-        .select("storage_path")
-        .eq("country_code", country)
-        .maybeSingle<{ storage_path: string }>();
-
-      let chosenPath: string | null = own?.storage_path ?? null;
-
-      // 2) Fall back to the admin-selected default country.
-      if (!chosenPath) {
-        const { data: settings } = await supabase
-          .from("store_settings")
-          .select("k_partnership_default_country")
-          .eq("id", 1)
-          .maybeSingle<{ k_partnership_default_country: string | null }>();
-        const fallback = settings?.k_partnership_default_country;
-        if (fallback) {
-          const { data: fallbackRow } = await supabase
-            .from("k_partnership_videos")
-            .select("storage_path")
-            .eq("country_code", fallback)
-            .maybeSingle<{ storage_path: string }>();
-          chosenPath = fallbackRow?.storage_path ?? null;
-        }
+      // Explainer video path (visitor country → admin default fallback) from
+      // MySQL via /api/catalog/k-partnership-video. Served from site-assets (S3).
+      let chosenPath: string | null = null;
+      try {
+        const res = await fetch(
+          `/api/catalog/k-partnership-video?country=${encodeURIComponent(country)}`,
+          { cache: "no-store" },
+        );
+        const json = await res.json();
+        chosenPath = json?.storage_path ?? null;
+      } catch {
+        chosenPath = null;
       }
 
       if (cancelled) return;
