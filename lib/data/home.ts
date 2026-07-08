@@ -1,6 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/db/prisma";
 import { jsonSafe } from "@/lib/db/serialize";
+import { supabaseUrlToCdn } from "@/lib/storage/backend";
 
 // MySQL reproductions of the home `_live` VIEWS (which weren't migrated).
 // Each mirrors the view's WHERE/ORDER exactly so the storefront output is
@@ -125,7 +126,14 @@ export async function getProductVideosLiveMysql(pageScope: string, limit: number
   });
   const shaped = rows.map((v) => {
     const { home_product_video_products, ...rest } = v as any;
-    return { ...rest, attached: home_product_video_products };
+    return {
+      ...rest,
+      // Rewrite stored Supabase Storage URLs to CloudFront (S3) so the video +
+      // poster load from S3, not supabase.co. No-op for path/CDN/other values.
+      video_url: rest.video_url ? supabaseUrlToCdn(rest.video_url) : rest.video_url,
+      thumbnail_url: rest.thumbnail_url ? supabaseUrlToCdn(rest.thumbnail_url) : rest.thumbnail_url,
+      attached: home_product_video_products,
+    };
   });
   return jsonSafe(shaped) as any[];
 }
