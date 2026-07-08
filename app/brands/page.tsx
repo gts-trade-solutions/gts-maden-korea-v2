@@ -1,7 +1,6 @@
 import type { Metadata } from 'next';
 import Image from 'next/image';
 import Link from 'next/link';
-import { createClient } from '@supabase/supabase-js';
 import { getTranslations } from 'next-intl/server';
 import { CustomerLayout } from '@/components/CustomerLayout';
 import { Card } from '@/components/ui/card';
@@ -47,13 +46,6 @@ type BrandCard = {
   product_count: number;
 };
 
-function supabaseServer() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
-}
-
 async function getLiveBrands(): Promise<BrandCard[]> {
   const notMIK = (b: any) => b.name?.trim().toLowerCase() !== 'made in korea';
   const toCard = (b: any, count: number): BrandCard => ({
@@ -68,37 +60,9 @@ async function getLiveBrands(): Promise<BrandCard[]> {
       '/placeholder.png',
   });
 
-  if (process.env.CATALOG_BACKEND === 'mysql') {
-    const { getBrandsDirectoryMysql } = await import('@/lib/data/catalog');
-    const data = await getBrandsDirectoryMysql();
-    return (data ?? []).filter(notMIK).map((b: any) => toCard(b, b.product_count ?? 0));
-  }
-
-  const sb = supabaseServer();
-
-  const { data: products } = await sb
-    .from('products')
-    .select('brand_id')
-    .eq('is_published', true)
-    .not('brand_id', 'is', null);
-
-  const counts = new Map<string, number>();
-  for (const row of products ?? []) {
-    const id = row.brand_id as string | null;
-    if (!id) continue;
-    counts.set(id, (counts.get(id) ?? 0) + 1);
-  }
-
-  const brandIds = Array.from(counts.keys());
-  if (brandIds.length === 0) return [];
-
-  const { data: brands } = await sb
-    .from('brands')
-    .select('id, slug, name, logo_url, thumbnail_url, thumbnail_path')
-    .in('id', brandIds)
-    .order('name', { ascending: true });
-
-  return (brands ?? []).filter(notMIK).map((b: BrandRow) => toCard(b, counts.get(b.id) ?? 0));
+  const { getBrandsDirectoryMysql } = await import('@/lib/data/catalog');
+  const data = await getBrandsDirectoryMysql();
+  return (data ?? []).filter(notMIK).map((b: any) => toCard(b, b.product_count ?? 0));
 }
 
 export default async function BrandsPage() {

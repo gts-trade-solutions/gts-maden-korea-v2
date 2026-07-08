@@ -8,7 +8,7 @@
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import { getRouteUser } from "@/lib/auth/routeUser";
-import { createServiceClient } from "@/lib/supabaseServer";
+import { prisma } from "@/lib/db/prisma";
 import { canResendVerification } from "@/lib/auth/emailVerification";
 import { sendVerificationEmail } from "@/lib/auth/sendVerificationEmail";
 
@@ -25,21 +25,23 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Service-role lookup for the canonical email + already-verified state.
-    const admin = createServiceClient();
-    const { data: authUser } = await admin.auth.admin.getUserById(userId);
-    if (!authUser?.user?.email) {
+    // Canonical email lives in the NextAuth user row; verified-state +
+    // preferred locale live on the profile.
+    const authUser = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true },
+    });
+    if (!authUser?.email) {
       return NextResponse.json(
         { ok: false, reason: "no_email" },
         { status: 400 }
       );
     }
 
-    const { data: profile } = await admin
-      .from("profiles")
-      .select("email_verified_at, preferred_locale")
-      .eq("id", userId)
-      .maybeSingle();
+    const profile = await prisma.profiles.findUnique({
+      where: { id: userId },
+      select: { email_verified_at: true, preferred_locale: true },
+    });
 
     if (profile?.email_verified_at) {
       return NextResponse.json({
@@ -63,7 +65,7 @@ export async function POST(req: NextRequest) {
 
     await sendVerificationEmail({
       userId,
-      email: authUser.user.email,
+      email: authUser.email,
       locale,
       origin: req.nextUrl.origin,
     });

@@ -2,7 +2,6 @@
 
 import React, { useEffect, useState, useRef } from "react";
 import { format } from "date-fns";
-import { supabase } from "@/lib/supabaseClient";
 
 type InstagramMedia = {
   id: string;

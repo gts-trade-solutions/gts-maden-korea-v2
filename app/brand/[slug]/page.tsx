@@ -2,14 +2,12 @@
 import { notFound } from "next/navigation";
 import { cookies } from "next/headers";
 import Image from "next/image";
-import { createClient } from "@supabase/supabase-js";
 import { getTranslations, getLocale } from "next-intl/server";
 import { CustomerLayout } from "@/components/CustomerLayout";
 import { ProductCard } from "@/components/ProductCard";
 import { ProductFilters } from "@/components/ProductFilters";
 import { BreadcrumbJsonLd } from "@/components/BreadcrumbJsonLd";
 import { isSupportedCountry, DEFAULT_COUNTRY } from "@/lib/countries";
-import { augmentProductsWithCountryOffers } from "@/lib/pricing";
 import { resolveMediaUrl } from "@/lib/storage/backend";
 import {
   mergeTranslation,
@@ -53,12 +51,6 @@ type ProductRow = {
   brands?: { name?: string | null } | null;
 };
 
-function supabaseServer() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-  return createClient(url, key);
-}
-
 function storagePublicUrl(path?: string | null) {
   if (!path) return null;
   return resolveMediaUrl("product-media", path) ?? null;
@@ -66,23 +58,12 @@ function storagePublicUrl(path?: string | null) {
 
 export async function generateStaticParams() {
   // Pre-render a small set of brand pages (ISR will handle the rest on-demand)
-  if (process.env.CATALOG_BACKEND === "mysql") {
-    const { prisma } = await import("@/lib/db/prisma");
-    const data = await prisma.brands.findMany({
-      select: { slug: true },
-      orderBy: { name: "asc" },
-      take: 50,
-    });
-    return data.map((b) => ({ slug: b.slug }));
-  }
-  const supabase = supabaseServer();
-  const { data, error } = await supabase
-    .from("brands")
-    .select("slug")
-    .order("name", { ascending: true })
-    .limit(50);
-
-  if (error || !data) return [];
+  const { prisma } = await import("@/lib/db/prisma");
+  const data = await prisma.brands.findMany({
+    select: { slug: true },
+    orderBy: { name: "asc" },
+    take: 50,
+  });
   return data.map((b) => ({ slug: b.slug }));
 }
 
@@ -91,22 +72,11 @@ export async function generateMetadata({
 }: {
   params: { slug: string };
 }) {
-  let brand: BrandRow | null = null;
-  if (process.env.CATALOG_BACKEND === "mysql") {
-    const { prisma } = await import("@/lib/db/prisma");
-    brand = (await prisma.brands.findUnique({
-      where: { slug: params.slug },
-      select: { id: true, slug: true, name: true, description: true },
-    })) as any;
-  } else {
-    const supabase = supabaseServer();
-    const { data } = await supabase
-      .from("brands")
-      .select("*")
-      .eq("slug", params.slug)
-      .maybeSingle<BrandRow>();
-    brand = data;
-  }
+  const { prisma } = await import("@/lib/db/prisma");
+  const brand = (await prisma.brands.findUnique({
+    where: { slug: params.slug },
+    select: { id: true, slug: true, name: true, description: true },
+  })) as BrandRow | null;
 
   if (!brand) {
     return { title: "Brand Not Found | MadenKorea" };
@@ -134,23 +104,11 @@ export default async function BrandPage({
 }) {
   const t = await getTranslations("brandPage");
   const locale = await getLocale();
-  const useMysql = process.env.CATALOG_BACKEND === "mysql";
 
   // 1) Brand lookup with translation embed (description only — brand
   // names stay in canonical English per the K-beauty branding norm).
-  let brandRow: any = null;
-  if (useMysql) {
-    const { getBrandWithTranslationsBySlug } = await import("@/lib/data/catalog");
-    brandRow = await getBrandWithTranslationsBySlug(params.slug);
-  } else {
-    const supabase = supabaseServer();
-    const { data } = await supabase
-      .from("brands")
-      .select(`*, brand_translations!left ( locale, description )`)
-      .eq("slug", params.slug)
-      .maybeSingle();
-    brandRow = data;
-  }
+  const { getBrandWithTranslationsBySlug } = await import("@/lib/data/catalog");
+  const brandRow: any = await getBrandWithTranslationsBySlug(params.slug);
 
   if (!brandRow) {
     notFound();
@@ -163,30 +121,8 @@ export default async function BrandPage({
   ) as BrandRow;
 
   // 2) Fetch this brand's published products + translations
-  let products: any[] = [];
-  if (useMysql) {
-    const { getBrandProductsMysql } = await import("@/lib/data/catalog");
-    products = await getBrandProductsMysql(brand.id);
-  } else {
-    const supabase = supabaseServer();
-    const { data } = await supabase
-      .from("products")
-      .select(
-        `
-        id, slug, name,
-        price, currency,
-        compare_at_price, sale_price, sale_starts_at, sale_ends_at,
-        short_description, volume_ml, net_weight_g, country_of_origin,
-        hero_image_path, created_at, stock_qty, is_featured, is_trending, is_bundle,
-        brands ( name ),
-        product_translations!left ( locale, short_description, description )
-      `
-      )
-      .eq("brand_id", brand.id)
-      .eq("is_published", true)
-      .order("created_at", { ascending: false });
-    products = data ?? [];
-  }
+  const { getBrandProductsMysql } = await import("@/lib/data/catalog");
+  const products: any[] = await getBrandProductsMysql(brand.id);
 
   // 3) Merge translations + map hero_image_path -> public URL
   const translated = mergeTranslations(
@@ -205,14 +141,8 @@ export default async function BrandPage({
   const country = isSupportedCountry(cookieCountry)
     ? cookieCountry
     : DEFAULT_COUNTRY;
-  let items;
-  if (useMysql) {
-    const { applyCountryOffers } = await import("@/lib/data/catalog");
-    items = await applyCountryOffers(withImages, country);
-  } else {
-    const supabase = supabaseServer();
-    items = await augmentProductsWithCountryOffers(withImages, country, supabase);
-  }
+  const { applyCountryOffers } = await import("@/lib/data/catalog");
+  const items = await applyCountryOffers(withImages, country);
 
   const selectedSort = searchParams?.sort || "newest";
   const selectedPrice = searchParams?.price || "all";

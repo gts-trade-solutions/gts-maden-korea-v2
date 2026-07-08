@@ -6,7 +6,6 @@ import { useTranslations } from 'next-intl';
 import { Search, Package } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
-import { supabase } from '@/lib/supabaseClient';
 import { resolveMediaUrl } from '@/lib/storage/backend';
 
 interface SearchSuggestion {
@@ -74,16 +73,20 @@ export function SearchAutocomplete({ autoFocus = false }: SearchAutocompleteProp
     setErrorState(null);
 
     const debounce = setTimeout(async () => {
-      const { data, error } = await supabase.rpc('search_products_tsv', {
-        q,
-        lim: 8,
-        cfg: 'simple',
-      });
-
-      if (cancelled) return;
-
-      if (error) {
-        console.error('search rpc error', error);
+      let data: any[] | null = null;
+      try {
+        const res = await fetch(
+          `/api/catalog/search?q=${encodeURIComponent(q)}&limit=8`,
+          { cache: 'no-store' }
+        );
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json?.ok === false) {
+          throw new Error(json?.error || 'search failed');
+        }
+        data = (json?.products ?? []) as any[];
+      } catch (error) {
+        if (cancelled) return;
+        console.error('search error', error);
         setSuggestions([]);
         setIsOpen(true);
         setSelectedIndex(-1);
@@ -91,6 +94,8 @@ export function SearchAutocomplete({ autoFocus = false }: SearchAutocompleteProp
         setErrorState('Could not load suggestions right now.');
         return;
       }
+
+      if (cancelled) return;
 
       const next: SearchSuggestion[] = (data ?? []).map((p: any) => {
         return {

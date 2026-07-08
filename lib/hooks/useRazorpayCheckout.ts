@@ -3,7 +3,6 @@
 import { useRef } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { supabase } from "@/lib/supabaseClient";
 import { useCart } from "@/lib/contexts/CartContext";
 import { trackEvent } from "@/lib/analytics/track";
 
@@ -52,9 +51,9 @@ export function useRazorpayCheckout() {
     busyRef.current = true;
 
     try {
-      // Order creation now goes through the API route: Supabase
-      // create_order_from_cart stays authoritative, and the new order is
-      // mirrored into MySQL so the account pages see it.
+      // Order creation goes through the API route, which builds the order in
+      // MySQL (createOrderFromCartMysql) — the source of truth the account
+      // pages and payment verify read.
       const createRes = await fetch("/api/orders/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

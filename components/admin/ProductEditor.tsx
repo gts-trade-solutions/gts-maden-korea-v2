@@ -2,7 +2,6 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -198,13 +197,21 @@ export function ProductEditor({
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.user) { router.replace("/vendor/login"); return; }
-
-      const { data: rpc, error: rpcErr } = await supabase.rpc("get_my_vendor");
-      if (rpcErr) { toast.error(rpcErr.message); router.replace("/vendor"); return; }
-      const vArr = Array.isArray(rpc) ? rpc : rpc ? [rpc] : [];
-      const v = vArr[0] as VendorInfo | undefined;
+      // Resolve the current session user's vendor via the MySQL-backed API
+      // (was supabase.auth.getSession() + supabase.rpc("get_my_vendor"), both
+      // RLS-blocked under NextAuth). 401 => no session => bounce to login.
+      const meRes = await fetch("/api/me/vendor", {
+        credentials: "include",
+        cache: "no-store",
+      });
+      if (meRes.status === 401) { router.replace("/vendor/login"); return; }
+      const meBody = await meRes.json().catch(() => ({} as any));
+      if (!meRes.ok || !meBody?.ok) {
+        toast.error(meBody?.error || "Failed to load vendor");
+        router.replace("/vendor");
+        return;
+      }
+      const v = (meBody.vendor ?? undefined) as VendorInfo | undefined;
       if (!v) { router.replace("/vendor/register"); return; }
       if (v.status !== "approved") { router.replace("/vendor"); return; }
       if (cancelled) return;

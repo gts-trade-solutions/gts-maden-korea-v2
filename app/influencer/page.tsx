@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { useTranslations } from "next-intl";
 import { useAuthSession, clientAuthToken } from "@/lib/auth/clientAuth";
 import { useCurrency } from "@/lib/contexts/CurrencyContext";
@@ -93,7 +92,6 @@ const FALLBACK_DEFAULT_USER = 15;
 
 /* ---------- Page ---------- */
 export default function InfluencerDashboardPage() {
-  const supabase = createClientComponentClient();
   // Visitor currency for the dashboard. Stats are stored in INR
   // canonical (see Phase 1 fix in razorpay/verify); we render them
   // converted to the influencer's current `mik_currency` selection
@@ -1007,7 +1005,6 @@ function WalletModal({
   loadInitial: WalletData | null;
   onSaved: (w: WalletData) => void;
 }) {
-  const supabase = createClientComponentClient();
   const t = useTranslations("influencer");
 
   // All five payout channels — influencer fills whichever applies.
@@ -1520,8 +1517,6 @@ function RequestManualBody({
   onClose: () => void;
   onDone: () => void;
 }) {
-  const supabase = createClientComponentClient();
-
   // Visitor currency for input. Influencer types the amount in their
   // local currency (UX choice — pick "$50" easier than "₹4,200");
   // on submit we convert to INR for storage. The commission ledger
@@ -1850,7 +1845,6 @@ function EditPromoModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const supabase = createClientComponentClient();
   const t = useTranslations("influencer");
 
   const [form, setForm] = useState({
@@ -2026,7 +2020,6 @@ function DeletePromoModal({
   onClose: () => void;
   onDeleted: () => void;
 }) {
-  const supabase = createClientComponentClient();
   const t = useTranslations("influencer");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

@@ -1,4 +1,3 @@
-import { createClient } from '@supabase/supabase-js';
 import { publicURL } from '@/lib/storage-public-url';
 
 export type BrandCard = {
@@ -10,28 +9,9 @@ export type BrandCard = {
   logo: string; // what the carousel expects
 };
 
-function supabaseServer() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { auth: { persistSession: false } }
-  );
-}
-
 export async function getBrandsForCarousel(bucket = 'site-assets'): Promise<BrandCard[]> {
-  let data: any[] = [];
-  if (process.env.CATALOG_BACKEND === 'mysql') {
-    const { getBrandsLiveMysql } = await import('@/lib/data/home');
-    data = await getBrandsLiveMysql();
-  } else {
-    const sb = supabaseServer();
-    const res = await sb.from('brands_live').select('*').order('position', { ascending: true });
-    if (res.error) {
-      console.error('[brands_live] error:', res.error.message);
-      return [];
-    }
-    data = res.data ?? [];
-  }
+  const { getBrandsLiveMysql } = await import('@/lib/data/home');
+  const data: any[] = await getBrandsLiveMysql();
 
   return (data ?? []).map((b: any) => ({
     id: b.id,

@@ -8,7 +8,6 @@ import { BrandCarousel } from "@/components/home/BrandCarousel";
 import { getBrandsForCarousel } from "./_data/getBrands";
 import { InstagramVideoCarousel } from "@/components/home/InstagramVideoCarousel";
 import { getInfluencerVideos } from "./_data/getInfluencerVideos";
-import { createClient } from "@supabase/supabase-js";
 import HomeVideoCarouselSection from "@/components/home/HomeVideoCarouselSection";
 import CertificationSwiper from "@/components/Cetifications";
 import { getTranslations, getLocale } from "next-intl/server";
@@ -18,7 +17,6 @@ import {
   PRODUCT_TRANSLATABLE_FIELDS,
 } from "@/lib/contentTranslations";
 import { getHomeVideoLimit } from "@/lib/storeSettings";
-import { augmentProductsWithCountryOffers } from "@/lib/pricing";
 import { resolveMediaUrl } from "@/lib/storage/backend";
 import type { Metadata } from "next";
 
@@ -95,13 +93,6 @@ export const metadata: Metadata = {
 
 export const revalidate = 30; // ISR: refresh the home data every 5 minutes
 
-function supabaseServer() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
-}
-
 function storagePublicUrl(path?: string | null) {
   if (!path) return null;
   return resolveMediaUrl("product-media", path) ?? null;
@@ -137,54 +128,8 @@ async function fetchEditorial(
   country: string,
   limit = 8
 ): Promise<CardProduct[]> {
-  // Read-path cutover flag. Default (unset / anything but "mysql") keeps the
-  // original Supabase path untouched. Set CATALOG_BACKEND=mysql to serve the
-  // home rails from local MySQL via the Prisma data-access layer.
-  const useMysql = process.env.CATALOG_BACKEND === "mysql";
-
-  let data: any[] = [];
-
-  if (useMysql) {
-    const { getEditorialProducts } = await import("@/lib/data/catalog");
-    data = await getEditorialProducts(kind, limit);
-  } else {
-    const supabase = supabaseServer();
-
-    let query = supabase
-      .from("products")
-      .select(
-        `
-        id, slug, name,
-        price, currency,
-        compare_at_price, sale_price, sale_starts_at, sale_ends_at,
-        is_featured, is_trending, is_bundle, new_until,
-        short_description, volume_ml, net_weight_g, country_of_origin,
-        hero_image_path, stock_qty,
-        brands ( name ),
-        product_translations!left ( locale, short_description, description )
-      `
-      )
-      .eq("is_published", true);
-
-    if (kind === "featured") {
-      query = query
-        .eq("is_featured", true)
-        .order("featured_rank", { ascending: true, nullsFirst: false })
-        .order("created_at", { ascending: false });
-    } else {
-      query = query
-        .eq("is_trending", true)
-        .order("purchases_count", { ascending: false, nullsFirst: true })
-        .order("created_at", { ascending: false });
-    }
-
-    const { data: rows, error } = await query.limit(limit);
-    if (error) {
-      console.error("fetchEditorial error", kind, error);
-      return [];
-    }
-    data = rows ?? [];
-  }
+  const { getEditorialProducts } = await import("@/lib/data/catalog");
+  const data: any[] = await getEditorialProducts(kind, limit);
 
   // Merge translated short_description for the active locale, then
   // attach the public image URL. Product names stay canonical English.
@@ -201,15 +146,8 @@ async function fetchEditorial(
   })) as CardProduct[];
 
   // Phase 1 country offers — augment with country-specific effective_price.
-  if (useMysql) {
-    const { applyCountryOffers } = await import("@/lib/data/catalog");
-    return await applyCountryOffers(withImages, country);
-  }
-  return await augmentProductsWithCountryOffers(
-    withImages,
-    country,
-    supabaseServer()
-  );
+  const { applyCountryOffers } = await import("@/lib/data/catalog");
+  return await applyCountryOffers(withImages, country);
 }
 
 export default async function Home() {

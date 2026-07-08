@@ -1,10 +1,6 @@
 // app/_data/getBanners.ts
-import { createClient } from '@supabase/supabase-js';
 import { resolveMediaUrl } from '@/lib/storage/backend';
 import type { Banner } from '@/types/banner';
-
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
 const FALLBACK_COUNTRY = 'IN';
 
@@ -41,22 +37,9 @@ export async function getBanners(
   scope: string = 'home',
   country: string = FALLBACK_COUNTRY
 ): Promise<Banner[]> {
-  const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-  const useMysql = process.env.CATALOG_BACKEND === 'mysql';
-
   async function query(targetCountry: string) {
-    if (useMysql) {
-      const { getBannersMysql } = await import('@/lib/data/home');
-      return { data: await getBannersMysql(scope, targetCountry), error: null as any };
-    }
-    return supabase
-      .from('home_banners_live')
-      .select(
-        'id, alt, image_path, video_url, link_url, position, page_scope, active, updated_at, country'
-      )
-      .eq('page_scope', scope)
-      .eq('country', targetCountry)
-      .order('position', { ascending: true });
+    const { getBannersMysql } = await import('@/lib/data/home');
+    return { data: await getBannersMysql(scope, targetCountry), error: null as any };
   }
 
   let { data, error } = await query(country);

@@ -4,9 +4,7 @@ import { cookies } from 'next/headers';
 import { getTranslations, getLocale } from 'next-intl/server';
 import { CustomerLayout } from '@/components/CustomerLayout';
 import { ProductCard } from '@/components/ProductCard';
-import { createClient } from '@supabase/supabase-js';
 import { isSupportedCountry, DEFAULT_COUNTRY } from '@/lib/countries';
-import { augmentProductsWithCountryOffers } from '@/lib/pricing';
 import { resolveMediaUrl } from '@/lib/storage/backend';
 import {
   mergeTranslations,
@@ -45,13 +43,6 @@ type CardProduct = {
   brands?: { name?: string | null } | null;
 };
 
-function supabaseServer() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
-}
-
 function storagePublicUrl(path?: string | null) {
   if (!path) return null;
   return resolveMediaUrl('product-media', path) ?? null;
@@ -62,56 +53,8 @@ async function searchProducts(query: string, locale: string): Promise<CardProduc
   if (!trimmed) return [];
 
   // Match-ordered product rows (each with a product_translations array).
-  let rows: any[] = [];
-
-  if (process.env.CATALOG_BACKEND === 'mysql') {
-    const { searchProductsMysql } = await import('@/lib/data/catalog');
-    rows = await searchProductsMysql(trimmed, 40);
-  } else {
-    const supabase = supabaseServer();
-
-    const { data: matches, error: searchError } = await supabase.rpc(
-      'search_products_tsv',
-      {
-        q: trimmed,
-        lim: 40,
-        cfg: 'simple',
-      }
-    );
-
-    if (searchError) {
-      console.error('searchProducts rpc error', searchError);
-      return [];
-    }
-
-    const matchedIds = Array.from(
-      new Set((matches ?? []).map((p: any) => p.id).filter(Boolean))
-    );
-    if (!matchedIds.length) return [];
-
-    const { data, error } = await supabase
-      .from('products')
-      .select(`
-        id, slug, name,
-        price, currency,
-        compare_at_price, sale_price, sale_starts_at, sale_ends_at,
-        is_featured, is_trending, is_bundle, new_until,
-        short_description, volume_ml, net_weight_g, country_of_origin,
-        hero_image_path, stock_qty,
-        brands ( name ),
-        product_translations!left ( locale, short_description, description )
-      `)
-      .eq('is_published', true)
-      .in('id', matchedIds);
-
-    if (error) {
-      console.error('searchProducts detail error', error);
-      return [];
-    }
-    // preserve the relevance order returned by the search RPC
-    const byMatch = new Map((data ?? []).map((p: any) => [p.id, p]));
-    rows = matchedIds.map((id) => byMatch.get(id)).filter(Boolean);
-  }
+  const { searchProductsMysql } = await import('@/lib/data/catalog');
+  const rows: any[] = await searchProductsMysql(trimmed, 40);
 
   // Apply translations for the active locale, then card-shape mapping.
   const translated = mergeTranslations(
@@ -149,17 +92,8 @@ export default async function SearchPage({
   const country = isSupportedCountry(cookieCountry)
     ? cookieCountry
     : DEFAULT_COUNTRY;
-  let searchResults;
-  if (process.env.CATALOG_BACKEND === 'mysql') {
-    const { applyCountryOffers } = await import('@/lib/data/catalog');
-    searchResults = await applyCountryOffers(rawResults, country);
-  } else {
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-    );
-    searchResults = await augmentProductsWithCountryOffers(rawResults, country, supabase);
-  }
+  const { applyCountryOffers } = await import('@/lib/data/catalog');
+  const searchResults = await applyCountryOffers(rawResults, country);
   const hasNoResults = searchResults.length === 0;
   const t = await getTranslations('searchPage');
 

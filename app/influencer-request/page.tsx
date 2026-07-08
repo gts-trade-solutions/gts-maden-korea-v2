@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { supabase } from "@/lib/supabaseClient";
 import { resolveMediaUrl } from "@/lib/storage/backend";
 import { clientAuthToken } from "@/lib/auth/clientAuth";
 import {
@@ -111,27 +110,10 @@ export default function PartnerProgramPage() {
   // No effect needed here any more — auth state is read inline where
   // it actually matters (status fetch + CTA click handlers below).
 
-  // ✅ 2) Attach browser session to server cookies ONCE (same idea as /auth/login + /auth/callback)
-  const attachedOnce = useRef(false);
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    if (attachedOnce.current) return;
-    attachedOnce.current = true;
-
-    (async () => {
-      const { data: s } = await supabase.auth.getSession();
-      const at = s?.session?.access_token;
-      const rt = s?.session?.refresh_token;
-      if (!at || !rt) return;
-
-      fetch("/api/auth/attach", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ access_token: at, refresh_token: rt }),
-      }).catch(() => {});
-    })();
-  }, [isAuthenticated]);
+  // Under NextAuth the session cookie is already set by the auth flow, so the
+  // former Supabase-session→server-cookie bridge (/api/auth/attach) is not
+  // needed. Identity travels via the NextAuth cookie + the clientAuthToken()
+  // sentinel used by the fetches below.
 
   // helper: get token or kick to login (no reload)
   const getAccessTokenOrRedirect = async () => {

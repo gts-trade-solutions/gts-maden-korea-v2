@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import Razorpay from "razorpay";
-import { createClient } from "@supabase/supabase-js";
 import { getRouteUser } from "@/lib/auth/routeUser";
 import {
   FALLBACK_RATES,

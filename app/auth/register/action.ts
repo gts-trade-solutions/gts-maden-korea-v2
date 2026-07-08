@@ -1,11 +1,20 @@
 'use server'
 
 import { redirect } from 'next/navigation'
-import { createClient } from '@/utils/supabase/server'
+import { randomUUID } from 'node:crypto'
+import bcrypt from 'bcryptjs'
+import { prisma } from '@/lib/db/prisma'
 
+// Legacy server-action signup. Creates the account directly in MySQL
+// (NextAuth user row + profiles row, same id) — no Supabase.
+//
+// A server action cannot establish a NextAuth session on its own, so on
+// success we hand off to the login page (with the email prefilled context)
+// rather than dropping the user on /account with no session. bcrypt rounds
+// = 10 to match lib/auth/authOptions.ts.
 export async function signup(formData: FormData) {
   const name = String(formData.get('name') ?? '').trim()
-  const email = String(formData.get('email') ?? '').trim()
+  const email = String(formData.get('email') ?? '').trim().toLowerCase()
   const password = String(formData.get('password') ?? '')
 
   // Basic guard
@@ -13,33 +22,28 @@ export async function signup(formData: FormData) {
     redirect(`/auth/register?error=${encodeURIComponent('Email and password are required')}`)
   }
 
-  const supabase = await createClient()
-
-  // Store name/role in user_metadata so it travels with the auth user
-  const { error } = await supabase.auth.signUp({
-    email,
-    password,
-    options: {
-      data: { full_name: name, role: 'customer' },
-      // If you use email confirmation, send them back here after clicking the email link:
-      emailRedirectTo: `${process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'}/auth/confirm`
-    }
-  })
-
-  if (error) {
-    redirect(`/auth/register?error=${encodeURIComponent(error.message)}`)
+  // Reject duplicate emails up front.
+  const existing = await prisma.user.findUnique({ where: { email } })
+  if (existing) {
+    redirect(`/auth/register?error=${encodeURIComponent('An account with this email already exists')}`)
   }
 
-  // If confirmations are OFF, a session exists now. Try to mirror full_name into public.profiles.
-  const { data: { user } } = await supabase.auth.getUser()
-  if (user && name) {
-    await supabase.from('profiles').update({ full_name: name }).eq('id', user.id)
-    // Ignore errors—RLS will block this when confirmations are ON.
+  const id = randomUUID()
+  try {
+    const passwordHash = await bcrypt.hash(password, 10)
+    await prisma.user.create({
+      data: { id, email, name: name || null, passwordHash },
+    })
+    await prisma.profiles.upsert({
+      where: { id },
+      update: { full_name: name || null },
+      create: { id, full_name: name || null },
+    })
+  } catch (e) {
+    console.error('[register/action] MySQL create failed:', e)
+    redirect(`/auth/register?error=${encodeURIComponent('Could not create your account. Please try again.')}`)
   }
 
-  // Decide where to go next:
-  // - If confirmations ON: show a “Check email” screen
-  // - If confirmations OFF: take them to the account page
-  if (!user) redirect('/check-email')
-  redirect('/account')
+  // No server-side session from a server action — send them to sign in.
+  redirect('/auth/login')
 }

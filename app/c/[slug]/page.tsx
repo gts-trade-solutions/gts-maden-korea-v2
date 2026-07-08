@@ -1,14 +1,12 @@
 ﻿// app/c/[slug]/page.tsx
 import { notFound } from "next/navigation";
 import { cookies } from "next/headers";
-import { createClient } from "@supabase/supabase-js";
 import { getTranslations, getLocale } from "next-intl/server";
 import { CustomerLayout } from "@/components/CustomerLayout";
 import { ProductCard } from "@/components/ProductCard";
 import { ProductFilters } from "@/components/ProductFilters";
 import { BreadcrumbJsonLd } from "@/components/BreadcrumbJsonLd";
 import { isSupportedCountry, DEFAULT_COUNTRY } from "@/lib/countries";
-import { augmentProductsWithCountryOffers } from "@/lib/pricing";
 import { resolveMediaUrl } from "@/lib/storage/backend";
 import {
   mergeTranslation,
@@ -51,35 +49,19 @@ type ProductRow = {
   brands?: { name?: string | null; slug?: string | null } | null;
 };
 
-function supabaseServer() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
-}
-
 function storagePublicUrl(path?: string | null) {
   if (!path) return null;
   return resolveMediaUrl("product-media", path) ?? null;
 }
 
 export async function generateStaticParams() {
-  if (process.env.CATALOG_BACKEND === "mysql") {
-    const { prisma } = await import("@/lib/db/prisma");
-    const data = await prisma.categories.findMany({
-      select: { slug: true },
-      orderBy: { slug: "asc" },
-      take: 50,
-    });
-    return data.map((c) => ({ slug: c.slug }));
-  }
-  const supabase = supabaseServer();
-  const { data } = await supabase
-    .from("categories")
-    .select("slug")
-    .order("slug")
-    .limit(50);
-  return (data ?? []).map((c) => ({ slug: c.slug }));
+  const { prisma } = await import("@/lib/db/prisma");
+  const data = await prisma.categories.findMany({
+    select: { slug: true },
+    orderBy: { slug: "asc" },
+    take: 50,
+  });
+  return data.map((c) => ({ slug: c.slug }));
 }
 
 export async function generateMetadata({
@@ -87,22 +69,11 @@ export async function generateMetadata({
 }: {
   params: { slug: string };
 }) {
-  let category: CategoryRow | null = null;
-  if (process.env.CATALOG_BACKEND === "mysql") {
-    const { prisma } = await import("@/lib/db/prisma");
-    category = (await prisma.categories.findUnique({
-      where: { slug: params.slug },
-      select: { name: true, description: true },
-    })) as any;
-  } else {
-    const supabase = supabaseServer();
-    const { data } = await supabase
-      .from("categories")
-      .select("name, description")
-      .eq("slug", params.slug)
-      .maybeSingle<CategoryRow>();
-    category = data;
-  }
+  const { prisma } = await import("@/lib/db/prisma");
+  const category = (await prisma.categories.findUnique({
+    where: { slug: params.slug },
+    select: { name: true, description: true },
+  })) as CategoryRow | null;
 
   if (!category) {
     // Root layout's title.template appends " | MadenKorea", so the
@@ -139,22 +110,10 @@ export default async function CategoryPage({
 }) {
   const t = await getTranslations("categoryPage");
   const locale = await getLocale();
-  const useMysql = process.env.CATALOG_BACKEND === "mysql";
 
   // 1) Category lookup — joining translations for the active locale.
-  let categoryRow: any = null;
-  if (useMysql) {
-    const { getCategoryWithTranslationsBySlug } = await import("@/lib/data/catalog");
-    categoryRow = await getCategoryWithTranslationsBySlug(params.slug);
-  } else {
-    const supabase = supabaseServer();
-    const { data } = await supabase
-      .from("categories")
-      .select(`*, category_translations!left ( locale, name, description )`)
-      .eq("slug", params.slug)
-      .maybeSingle();
-    categoryRow = data;
-  }
+  const { getCategoryWithTranslationsBySlug } = await import("@/lib/data/catalog");
+  const categoryRow: any = await getCategoryWithTranslationsBySlug(params.slug);
 
   if (!categoryRow) {
     notFound();
@@ -168,29 +127,8 @@ export default async function CategoryPage({
   ) as CategoryRow;
 
   // 2) Products in this category (published only) + their translations
-  let products: any[] = [];
-  if (useMysql) {
-    const { getCategoryProductsMysql } = await import("@/lib/data/catalog");
-    products = await getCategoryProductsMysql(category.id);
-  } else {
-    const supabase = supabaseServer();
-    const { data } = await supabase
-      .from("products")
-      .select(
-        `
-        id, slug, name,
-        price, currency,
-        compare_at_price, sale_price, sale_starts_at, sale_ends_at,
-        short_description, volume_ml, net_weight_g, country_of_origin,
-        hero_image_path, created_at, stock_qty, is_featured, is_trending, is_bundle,
-        brands ( name, slug ),
-        product_translations!left ( locale, short_description, description )
-      `
-      )
-      .eq("category_id", category.id)
-      .eq("is_published", true);
-    products = data ?? [];
-  }
+  const { getCategoryProductsMysql } = await import("@/lib/data/catalog");
+  const products: any[] = await getCategoryProductsMysql(category.id);
 
   // 3) Merge translations + compute public URLs on the server (faster cards)
   const translated = mergeTranslations(
@@ -215,14 +153,8 @@ export default async function CategoryPage({
   const country = isSupportedCountry(cookieCountry)
     ? cookieCountry
     : DEFAULT_COUNTRY;
-  let items;
-  if (useMysql) {
-    const { applyCountryOffers } = await import("@/lib/data/catalog");
-    items = await applyCountryOffers(withImages, country);
-  } else {
-    const supabase = supabaseServer();
-    items = await augmentProductsWithCountryOffers(withImages, country, supabase);
-  }
+  const { applyCountryOffers } = await import("@/lib/data/catalog");
+  const items = await applyCountryOffers(withImages, country);
 
   const selectedSort = searchParams?.sort || "newest";
   const selectedPrice = searchParams?.price || "all";

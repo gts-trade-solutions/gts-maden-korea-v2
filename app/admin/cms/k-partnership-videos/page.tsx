@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabaseClient";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,7 +19,7 @@ import {
   type CountryCode,
 } from "@/lib/countries";
 import { CountryFlag } from "@/components/CountryFlag";
-import { STORAGE_BACKEND, resolveMediaUrl } from "@/lib/storage/backend";
+import { resolveMediaUrl } from "@/lib/storage/backend";
 import { useAuth } from "@/lib/contexts/AuthContext";
 
 type VideoRow = {
@@ -51,53 +50,6 @@ function putToS3WithProgress(
       resolve(xhr.status >= 200 && xhr.status < 300 ? {} : { error: `${xhr.status} ${xhr.statusText}` });
     xhr.onerror = () => resolve({ error: "Network error during upload" });
     xhr.send(file);
-  });
-}
-
-// Upload via XMLHttpRequest so we can stream the byte count back as
-// progress events. The supabase-js storage client uses `fetch`, which
-// doesn't expose upload progress in browsers. Hitting Supabase's REST
-// storage endpoint directly with the user's session token bypasses
-// that limitation while still going through the same RLS policies.
-function uploadWithProgress(opts: {
-  bucket: string;
-  path: string;
-  file: File;
-  accessToken: string;
-  upsert?: boolean;
-  onProgress?: (pct: number) => void;
-}): Promise<{ error?: string }> {
-  return new Promise((resolve) => {
-    const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/${opts.bucket}/${opts.path}`;
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", url, true);
-    xhr.setRequestHeader("Authorization", `Bearer ${opts.accessToken}`);
-    xhr.setRequestHeader("apikey", process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "");
-    xhr.setRequestHeader(
-      "Content-Type",
-      opts.file.type || "application/octet-stream"
-    );
-    xhr.setRequestHeader("Cache-Control", "max-age=31536000");
-    if (opts.upsert) xhr.setRequestHeader("x-upsert", "true");
-
-    xhr.upload.onprogress = (e) => {
-      if (!e.lengthComputable || !opts.onProgress) return;
-      opts.onProgress(Math.round((e.loaded / e.total) * 100));
-    };
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve({});
-      } else {
-        let msg = `${xhr.status} ${xhr.statusText}`;
-        try {
-          const parsed = JSON.parse(xhr.responseText);
-          if (parsed?.message) msg = parsed.message;
-        } catch {}
-        resolve({ error: msg });
-      }
-    };
-    xhr.onerror = () => resolve({ error: "Network error during upload" });
-    xhr.send(opts.file);
   });
 }
 
@@ -189,11 +141,11 @@ export default function KPartnershipVideosAdminPage() {
       const onProgress = (pct: number) =>
         setUploadProgress((p) => ({ ...p, [country]: pct }));
 
-      // Step 1: upload the bytes with XHR progress. Under S3 we presign a PUT
-      // (cookie-auth via /api/uploads/presign — no Supabase session needed);
-      // under Supabase we PUT to its REST endpoint with the session token.
+      // Step 1: upload the bytes with XHR progress. We presign a PUT
+      // (cookie-auth via /api/uploads/presign — admin-gated server-side) and
+      // PUT the bytes straight to S3.
       let upErr: string | undefined;
-      if (STORAGE_BACKEND === "s3") {
+      {
         const presignRes = await fetch("/api/uploads/presign", {
           method: "POST",
           credentials: "include",
@@ -206,16 +158,6 @@ export default function KPartnershipVideosAdminPage() {
         } else {
           upErr = (await putToS3WithProgress(presign.uploadUrl, file, onProgress)).error;
         }
-      } else {
-        const { data: s } = await supabase.auth.getSession();
-        const token = s?.session?.access_token;
-        if (!token) {
-          toast.error("Session expired — please sign in again");
-          return;
-        }
-        upErr = (
-          await uploadWithProgress({ bucket: STORAGE_BUCKET, path, file, accessToken: token, upsert: true, onProgress })
-        ).error;
       }
       if (upErr) {
         toast.error(upErr || "Storage upload failed");

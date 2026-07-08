@@ -12,7 +12,7 @@
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import { getRouteUser } from "@/lib/auth/routeUser";
-import { createServiceClient } from "@/lib/supabaseServer";
+import { prisma } from "@/lib/db/prisma";
 import { sendWelcomeEmail } from "@/lib/auth/sendWelcomeEmail";
 import { createAdminNotification } from "@/lib/admin/notifications";
 
@@ -29,20 +29,27 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const admin = createServiceClient();
-    const { data: authUser } = await admin.auth.admin.getUserById(userId);
-    if (!authUser?.user?.email) {
+    // Canonical email lives in the NextAuth user row.
+    const authUser = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true },
+    });
+    if (!authUser?.email) {
       return NextResponse.json(
         { ok: false, reason: "no_email" },
         { status: 400 }
       );
     }
+    const userEmail = authUser.email;
 
-    const { data: profile } = await admin
-      .from("profiles")
-      .select("full_name, preferred_locale, preferred_country")
-      .eq("id", userId)
-      .maybeSingle();
+    const profile = await prisma.profiles.findUnique({
+      where: { id: userId },
+      select: {
+        full_name: true,
+        preferred_locale: true,
+        preferred_country: true,
+      },
+    });
 
     const locale =
       (profile?.preferred_locale as string | null) ||
@@ -54,7 +61,7 @@ export async function POST(req: NextRequest) {
       null;
 
     await sendWelcomeEmail({
-      email: authUser.user.email,
+      email: userEmail,
       name: (profile?.full_name as string | null) ?? null,
       locale,
       country,
@@ -68,9 +75,9 @@ export async function POST(req: NextRequest) {
     // signup flow (see app/vendor/(public)/register/...).
     void createAdminNotification({
       type: "user_signed_up",
-      title: `New customer signed up — ${authUser.user.email}`,
+      title: `New customer signed up — ${userEmail}`,
       body: ((profile?.full_name as string | null) ?? "").trim() || null,
-      link: `/admin/users?q=${encodeURIComponent(authUser.user.email ?? "")}`,
+      link: `/admin/users?q=${encodeURIComponent(userEmail)}`,
       severity: "info",
       meta: { user_id: userId, country: country ?? null },
       createdBy: userId,

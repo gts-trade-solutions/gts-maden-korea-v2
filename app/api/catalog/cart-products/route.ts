@@ -36,7 +36,7 @@ export async function GET(req: Request) {
       select: {
         id: true, slug: true, name: true, price: true, currency: true, is_published: true,
         compare_at_price: true, sale_price: true, sale_starts_at: true, sale_ends_at: true,
-        hero_image_path: true, brands: { select: { name: true } },
+        hero_image_path: true, is_bundle: true, brands: { select: { name: true } },
       },
     }),
     fetchCountryOffersMysql(ids, country),

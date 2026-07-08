@@ -5,11 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { signIn, useSession } from "next-auth/react";
-import { supabase } from "@/lib/supabaseClient";
 import { CustomerLayout } from "@/components/CustomerLayout";
-
-// Client auth-backend flag (mirrors server AUTH_BACKEND). Unset = Supabase.
-const NEXTAUTH = process.env.NEXT_PUBLIC_AUTH_BACKEND === "nextauth";
 import { Button } from "@/components/ui/button";
 import {
   Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle,
@@ -57,45 +53,14 @@ const [oauthLoading, setOauthLoading] = useState<"google" | "facebook" | null>(n
 
   // If already logged in, go where they intended.
   useEffect(() => {
-    if (NEXTAUTH) {
-      if (naStatus === "loading") return;
-      if (naSession?.user) router.replace(redirect);
-      setLoading(false);
-      return;
-    }
-    (async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user) router.replace(redirect);
-      setLoading(false);
-    })();
+    if (naStatus === "loading") return;
+    if (naSession?.user) router.replace(redirect);
+    setLoading(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router, redirect, naStatus, (naSession?.user as any)?.id]);
 
   const onChange = (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((f) => ({ ...f, [e.target.name]: e.target.value }));
-
-  const mapAuthError = (message?: string) => {
-    const m = (message || "").toLowerCase();
-    if (m.includes("invalid login credentials")) return t("errInvalidCredentials");
-    if (m.includes("email not confirmed")) return t("errEmailNotConfirmed");
-    if (m.includes("too many requests")) return t("errTooManyRequests");
-    return t("errGeneric");
-  };
-
-  // Attach browser session to server cookies so /api routes & RSC see auth
-  const attachAfterAuth = async () => {
-    const { data: s } = await supabase.auth.getSession();
-    const at = s?.session?.access_token;
-    const rt = s?.session?.refresh_token;
-    if (!at || !rt) return;
-    // sets sb-* cookies on the response
-    await fetch("/api/auth/attach", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({ access_token: at, refresh_token: rt }),
-    }).catch(() => {});
-  };
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -109,37 +74,12 @@ const [oauthLoading, setOauthLoading] = useState<"google" | "facebook" | null>(n
 
     setSubmitting(true);
 
-    if (NEXTAUTH) {
-      const res = await signIn("credentials", { email, password, redirect: false });
-      if (res?.error) {
-        setSubmitting(false);
-        toast.error(t("errInvalidCredentials"));
-        return;
-      }
-      void fetch("/api/events/identify", {
-        method: "POST",
-        credentials: "include",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ kind: "login" }),
-      }).catch(() => {});
+    const res = await signIn("credentials", { email, password, redirect: false });
+    if (res?.error) {
       setSubmitting(false);
-      toast.success(t("signedIn"));
-      router.replace(redirect);
+      toast.error(t("errInvalidCredentials"));
       return;
     }
-
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) {
-      setSubmitting(false);
-      toast.error(mapAuthError(error.message));
-      return;
-    }
-
-    // If a session was returned, set SSR cookies so server can see auth immediately
-    if (data.session) {
-      await attachAfterAuth();
-    }
-
     // Fire-and-forget: stitch pre-login anonymous activity onto the new
     // user_id and emit a `login` event for funnel attribution.
     void fetch("/api/events/identify", {
@@ -148,7 +88,6 @@ const [oauthLoading, setOauthLoading] = useState<"google" | "facebook" | null>(n
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ kind: "login" }),
     }).catch(() => {});
-
     setSubmitting(false);
     toast.success(t("signedIn"));
     router.replace(redirect);
@@ -160,29 +99,8 @@ const loginWithProvider = async (provider: "google" | "facebook") => {
 
     const redirectParam = redirect || "/account";
 
-    if (NEXTAUTH) {
-      // NextAuth drives the OAuth redirect + its own /api/auth/callback.
-      await signIn(provider, { callbackUrl: redirectParam });
-      return;
-    }
-
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider,
-      options: {
-        // This must match what you added in Supabase URL config:
-        // e.g. http://localhost:3000/auth/callback
-        redirectTo: `${window.location.origin}/auth/callback?redirect=${encodeURIComponent(
-          redirectParam,
-        )}`,
-      },
-    });
-
-    if (error) {
-      toast.error(error.message || `Could not start ${provider} sign in`);
-      setOauthLoading(null);
-    }
-    // On success, browser will be redirected away, so code after this usually
-    // won't run. We don't call attachAfterAuth here – that's done in /auth/callback.
+    // NextAuth drives the OAuth redirect + its own /api/auth/callback.
+    await signIn(provider, { callbackUrl: redirectParam });
   } catch (err: any) {
     console.error(err);
     toast.error("Something went wrong, please try again.");

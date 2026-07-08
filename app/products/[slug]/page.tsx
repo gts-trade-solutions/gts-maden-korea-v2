@@ -4,14 +4,13 @@ export const revalidate = 300;
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { cookies } from 'next/headers';
-import { createClient } from '@supabase/supabase-js';
 import { unstable_cache } from 'next/cache';
 import ProductPage from './product';
 import type { StoryBlock } from '@/lib/types/productStory';
 import { DELIVERY_THRESHOLD, DEFAULT_SHIPPING_FEE } from '@/lib/membership';
 import { BreadcrumbJsonLd, type BreadcrumbCrumb } from '@/components/BreadcrumbJsonLd';
 import { isSupportedCountry, DEFAULT_COUNTRY } from '@/lib/countries';
-import { fetchCountryOffers, effectivePriceForCountry } from '@/lib/pricing';
+import { effectivePriceForCountry } from '@/lib/pricing';
 import {
   mergeTranslation,
   PRODUCT_TRANSLATABLE_FIELDS,
@@ -19,55 +18,10 @@ import {
 import { getLocale } from 'next-intl/server';
 import { resolveMediaUrl } from '@/lib/storage/backend';
 
-const STORY_SELECT_COLUMNS =
-  'id, product_id, position, block_type, size, mode, headline, body, text_position, text_color, text_bg, text_size, text_weight, caption_mode, caption_backdrop, split_direction, image_path, image_alt, image_focal_x, image_focal_y, image_fit, image_zoom, image_bg, caption, stats_items, before_image_path, after_image_path, comparison_caption, created_at, updated_at';
-
 const getStoryBlocksForProduct = unstable_cache(
   async (productId: string): Promise<StoryBlock[]> => {
-    if (process.env.CATALOG_BACKEND === 'mysql') {
-      const { getStoryBlocksMysql } = await import('@/lib/data/catalog');
-      return (await getStoryBlocksMysql(productId)) as unknown as StoryBlock[];
-    }
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-    );
-    const { data, error } = await supabase
-      .from('product_story_blocks')
-      .select(STORY_SELECT_COLUMNS)
-      .eq('product_id', productId)
-      .order('position', { ascending: true });
-    if (error) {
-      // If a v3/v4 column hasn't been added yet, retry without it so
-      // we don't take the section offline during the migration window.
-      const optionalCols = [
-        'text_size',
-        'text_weight',
-        'caption_mode',
-        'caption_backdrop',
-        'image_focal_x',
-        'image_focal_y',
-        'image_fit',
-        'image_zoom',
-        'image_bg',
-        'text_bg',
-      ];
-      const missing = optionalCols.find((c) => error.message.includes(c));
-      if (missing) {
-        const stripped = optionalCols.reduce(
-          (acc, c) => acc.replace(`, ${c}`, ''),
-          STORY_SELECT_COLUMNS
-        );
-        const fallback = await supabase
-          .from('product_story_blocks')
-          .select(stripped)
-          .eq('product_id', productId)
-          .order('position', { ascending: true });
-        return ((fallback.data ?? []) as unknown) as StoryBlock[];
-      }
-      return [];
-    }
-    return ((data ?? []) as unknown) as StoryBlock[];
+    const { getStoryBlocksMysql } = await import('@/lib/data/catalog');
+    return (await getStoryBlocksMysql(productId)) as unknown as StoryBlock[];
   },
   ['story-blocks-by-product'],
   { revalidate: 300, tags: ['story-blocks'] }
@@ -89,34 +43,8 @@ const SITE =
 // lets the client skip its own product re-fetch entirely.
 const getPublishedProductBySlug = unstable_cache(
   async (slug: string) => {
-    if (process.env.CATALOG_BACKEND === 'mysql') {
-      const { getProductDetailBySlug } = await import('@/lib/data/catalog');
-      return await getProductDetailBySlug(slug);
-    }
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-    );
-
-    const { data } = await supabase
-      .from('products')
-      .select(`
-      id, slug, name, short_description, description,
-      price, currency, sale_price, compare_at_price, sale_starts_at, sale_ends_at,
-      is_published, brand_id, category_id, hero_image_path, stock_qty, sku,
-      volume_ml, net_weight_g, country_of_origin, new_until,
-      is_featured, is_trending, is_bundle,
-      made_in_korea, is_vegetarian, cruelty_free, toxin_free, paraben_free,
-      ingredients_md, key_features_md, additional_details_md, box_contents_md, key_benefits,
-      video_path, vendor_id,
-      brands ( name, slug ),
-      product_translations!left ( locale, short_description, description, ingredients_md, additional_details_md, key_features_md, box_contents_md, faq, key_benefits, additional_details )
-    `)
-      .eq('slug', slug)
-      .eq('is_published', true)
-      .maybeSingle();
-
-    return data ?? null;
+    const { getProductDetailBySlug } = await import('@/lib/data/catalog');
+    return await getProductDetailBySlug(slug);
   },
   ['published-product-by-slug'],
   // Tag with both a global "products" key and a per-slug key so the
@@ -141,21 +69,8 @@ type ProductImageRow = {
 };
 const getProductImages = unstable_cache(
   async (productId: string): Promise<ProductImageRow[]> => {
-    if (process.env.CATALOG_BACKEND === 'mysql') {
-      const { getProductImagesMysql } = await import('@/lib/data/catalog');
-      return await getProductImagesMysql(productId);
-    }
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-    );
-    const { data } = await supabase
-      .from('product_images')
-      .select('storage_path, alt, sort_order')
-      .eq('product_id', productId)
-      .order('sort_order', { ascending: true })
-      .limit(8);
-    return ((data ?? []).filter((r) => r.storage_path) as ProductImageRow[]);
+    const { getProductImagesMysql } = await import('@/lib/data/catalog');
+    return await getProductImagesMysql(productId);
   },
   ['product-images-full'],
   { revalidate: 300, tags: ['products'] }
@@ -167,20 +82,8 @@ const getProductImages = unstable_cache(
 // reviewCount >= 1).
 const getProductReviewStats = unstable_cache(
   async (productId: string): Promise<{ rating_avg: number | null; rating_count: number } | null> => {
-    if (process.env.CATALOG_BACKEND === 'mysql') {
-      const { getReviewStatsMysql } = await import('@/lib/data/catalog');
-      return await getReviewStatsMysql(productId);
-    }
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-    );
-    const { data } = await supabase
-      .from('product_review_stats')
-      .select('rating_avg, rating_count')
-      .eq('product_id', productId)
-      .maybeSingle();
-    return data ?? null;
+    const { getReviewStatsMysql } = await import('@/lib/data/catalog');
+    return await getReviewStatsMysql(productId);
   },
   ['product-review-stats'],
   { revalidate: 300, tags: ['products', 'reviews'] }
@@ -307,16 +210,8 @@ export default async function Page({
     : DEFAULT_COUNTRY;
   let countryOffers: Record<string, number> = {};
   if (prod.id) {
-    if (process.env.CATALOG_BACKEND === 'mysql') {
-      const { fetchCountryOffersMysql } = await import('@/lib/data/catalog');
-      countryOffers = await fetchCountryOffersMysql([prod.id], countryForPricing);
-    } else {
-      const supabase = createClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-      );
-      countryOffers = await fetchCountryOffers([prod.id], countryForPricing, supabase);
-    }
+    const { fetchCountryOffersMysql } = await import('@/lib/data/catalog');
+    countryOffers = await fetchCountryOffersMysql([prod.id], countryForPricing);
   }
   const finalPrice = effectivePriceForCountry(
     {

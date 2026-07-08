@@ -1,20 +1,16 @@
 import { NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/db/prisma";
-import { createAdminClient } from "@/lib/supabaseAdmin";
 
-// Dual-write signup for the transition period.
+// Registration — NextAuth/MySQL only (post-Supabase).
 //
-// The vendor app still authenticates against Supabase Auth, so Supabase
-// auth.users must stay complete until BOTH apps are off Supabase. So a new
-// registration is written to BOTH identity stores with the SAME id:
-//   • Supabase Auth (admin.createUser) — canonical id source + keeps the vendor
-//     app able to see/authenticate the user; its handle_new_user trigger also
-//     creates the Supabase profiles row.
-//   • MySQL `auth_users` (bcrypt hash, for NextAuth credentials) + `profiles`.
-// If the MySQL half fails, the Supabase user is rolled back so we never leave a
-// half-created account. Same plaintext password feeds both hashes, so the user
-// can log in via Supabase (vendor app) AND NextAuth (this app).
+// Creates the account in MySQL with a single generated id shared across both
+// identity rows:
+//   • `auth_users` (Prisma model `User`) — bcrypt hash for NextAuth credentials.
+//   • `profiles` — the app-facing profile row, same id.
+// bcrypt rounds = 10 to match lib/auth/authOptions.ts so migrated and freshly
+// created hashes verify identically.
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({} as any));
   const email = String(body?.email ?? "").toLowerCase().trim();
@@ -28,32 +24,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "WEAK_PASSWORD" }, { status: 400 });
   }
 
-  // Fast pre-check against MySQL (the Supabase create also enforces uniqueness).
+  // Uniqueness pre-check against the NextAuth user table.
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) {
     return NextResponse.json({ error: "EMAIL_EXISTS" }, { status: 409 });
   }
 
-  const admin = createAdminClient();
+  const id = randomUUID();
 
-  // 1) Supabase Auth — canonical id. Trigger creates the Supabase profiles row.
-  const { data: created, error: sErr } = await admin.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-    user_metadata: { full_name: fullName },
-  });
-  if (sErr || !created?.user) {
-    const msg = sErr?.message || "SUPABASE_CREATE_FAILED";
-    const taken = /already|exists|registered/i.test(msg);
-    return NextResponse.json(
-      { error: taken ? "EMAIL_EXISTS" : "SUPABASE_CREATE_FAILED" },
-      { status: taken ? 409 : 500 }
-    );
-  }
-  const id = created.user.id;
-
-  // 2) MySQL auth_users (NextAuth credentials) + profiles, SAME id.
   try {
     const passwordHash = await bcrypt.hash(password, 10);
     await prisma.user.create({ data: { id, email, name: fullName, passwordHash } });
@@ -63,12 +41,6 @@ export async function POST(req: Request) {
       create: { id, full_name: fullName },
     });
   } catch (e) {
-    // Roll back the Supabase user — don't leave a half-created account.
-    try {
-      await admin.auth.admin.deleteUser(id);
-    } catch (delErr) {
-      console.error("[register] rollback deleteUser failed:", delErr);
-    }
     console.error("[register] MySQL create failed:", e);
     return NextResponse.json({ error: "MYSQL_CREATE_FAILED" }, { status: 500 });
   }

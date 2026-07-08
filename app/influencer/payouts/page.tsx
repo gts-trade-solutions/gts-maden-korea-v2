@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
-import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { useAuthSession } from "@/lib/auth/clientAuth";
 import {
   ArrowLeft,
@@ -27,7 +26,6 @@ type PayoutRow = {
 };
 
 export default function PayoutsPage() {
-  const supabase = createClientComponentClient();
   const t = useTranslations("influencer");
   // Backend-aware: Supabase access_token, or a NextAuth sentinel (cookie auth).
   const { token } = useAuthSession();

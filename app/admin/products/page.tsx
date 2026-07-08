@@ -2,8 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { supabase } from "@/lib/supabaseClient";
-import { mirrorMysql } from "@/lib/admin/mirror-mysql";
+import { useAuth } from "@/lib/contexts/AuthContext";
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -57,6 +56,7 @@ function toDateInputValue(ts?: string | null) {
 
 export default function AdminProductsPage() {
   const router = useRouter();
+  const { logout } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<Record<string, boolean>>({});
@@ -82,9 +82,8 @@ export default function AdminProductsPage() {
     (async () => {
       setLoading(true);
       try {
-        // Optional: ensure current user is admin (adapt to your setup)
-        // const { data: isAdmin } = await supabase.rpc('is_admin');
-        // if (!isAdmin) { router.replace('/admin'); return; }
+        // Admin gating is enforced server-side by the /api/admin/* routes
+        // (requireAdmin). No client-side auth check needed here.
 
         // Read from MySQL (source of truth) via the admin catalog endpoint —
         // was 4 browser-direct Supabase selects. See migration/SUPABASE_DECOMMISSION.md.
@@ -231,7 +230,7 @@ export default function AdminProductsPage() {
   };
 
   const onLogout = async () => {
-    await supabase.auth.signOut();
+    await logout();
     router.push('/');
   };
 

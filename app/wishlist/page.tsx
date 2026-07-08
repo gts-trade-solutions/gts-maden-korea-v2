@@ -4,24 +4,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
-import { supabase } from "@/lib/supabaseClient";
 import { resolveMediaUrl } from "@/lib/storage/backend";
 import { CustomerLayout } from '@/components/CustomerLayout';
 import { useAuth } from '@/lib/contexts/AuthContext';
 import { useCart } from '@/lib/contexts/CartContext';
 import { useWishlist } from '@/lib/contexts/WishlistContext';
 import { useCurrency } from '@/lib/contexts/CurrencyContext';
-import { fetchCountryOffers } from "@/lib/pricing";
-import { isSupportedCountry, DEFAULT_COUNTRY } from "@/lib/countries";
-
-function readCountryFromCookie(): string {
-  if (typeof document === "undefined") return DEFAULT_COUNTRY;
-  const match = document.cookie
-    .split("; ")
-    .find((row) => row.startsWith("mik_country="));
-  const raw = match ? decodeURIComponent(match.split("=")[1] ?? "") : "";
-  return isSupportedCountry(raw) ? raw : DEFAULT_COUNTRY;
-}
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -166,22 +154,29 @@ export default function WishlistPage() {
           orderById.set(m.product_id, idx);
         });
 
-        const { data: prodData, error: prodErr } = await supabase
-          .from('products')
-          .select(
-            'id, slug, name, price, currency, compare_at_price, sale_price, sale_starts_at, sale_ends_at, hero_image_path, is_bundle, brands ( name )'
-          )
-          .in('id', metaIds);
-
-        if (cancelled) return;
-
-        if (prodErr) {
+        // Product/catalog rows + visitor-country offers from MySQL via the
+        // public cart-products route (same shape the cart page reads).
+        let prodData: any[] = [];
+        let offers: Record<string, number> = {};
+        try {
+          const res = await fetch(
+            `/api/catalog/cart-products?ids=${encodeURIComponent(metaIds.join(','))}`,
+            { cache: 'no-store' }
+          );
+          if (!res.ok) throw new Error(`CART_PRODUCTS_${res.status}`);
+          const payload = await res.json();
+          prodData = payload?.products ?? [];
+          offers = payload?.offers ?? {};
+        } catch (prodErr) {
+          if (cancelled) return;
           console.error(prodErr);
           toast.error(t('wishlistErrLoad'));
           setRows([]);
           setLoading(false);
           return;
         }
+
+        if (cancelled) return;
 
         const nowMs = Date.now();
         const mapped = (prodData ?? []).map((p: any) => {
@@ -200,18 +195,9 @@ export default function WishlistPage() {
           } as WishlistRow;
         });
 
-        // Phase 1 country offers — attach effective_price per product
-        // so list display + sorting + add-to-cart math reflects the
-        // visitor's country.
-        const productIds = mapped.map((r) => r.product.id);
-        const offers = await fetchCountryOffers(
-          productIds,
-          readCountryFromCookie(),
-          supabase
-        );
-
-        if (cancelled) return;
-
+        // Phase 1 country offers (from the route above) — attach
+        // effective_price per product so list display + sorting +
+        // add-to-cart math reflects the visitor's country.
         const withOffers = mapped.map((r) =>
           offers[r.product.id] != null
             ? {
@@ -235,16 +221,19 @@ export default function WishlistPage() {
         setLoading(false);
         return;
       }
-      const { data, error } = await supabase
-        .from('products')
-        .select(
-          'id, slug, name, price, currency, compare_at_price, sale_price, sale_starts_at, sale_ends_at, hero_image_path, is_bundle, brands ( name )'
-        )
-        .in('id', ids);
-
-      if (cancelled) return;
-
-      if (error) {
+      let data: any[] = [];
+      let anonOffers: Record<string, number> = {};
+      try {
+        const res = await fetch(
+          `/api/catalog/cart-products?ids=${encodeURIComponent(ids.join(','))}`,
+          { cache: 'no-store' }
+        );
+        if (!res.ok) throw new Error(`CART_PRODUCTS_${res.status}`);
+        const payload = await res.json();
+        data = payload?.products ?? [];
+        anonOffers = payload?.offers ?? {};
+      } catch (error) {
+        if (cancelled) return;
         console.error(error);
         toast.error(t('wishlistErrLoad'));
         setRows([]);
@@ -252,13 +241,8 @@ export default function WishlistPage() {
         return;
       }
 
-      // Phase 1 country offers for anon path. Same as auth path
-      // above — augments each product's effective_price.
-      const anonOffers = await fetchCountryOffers(
-        (data ?? []).map((p: any) => p.id),
-        readCountryFromCookie(),
-        supabase
-      );
+      if (cancelled) return;
+
       const synthRows: WishlistRow[] = (data ?? []).map((p: any) => ({
         id: p.id, // no DB row — fall back to product id
         product_id: p.id,

@@ -7,7 +7,6 @@ import { CustomerLayout } from "@/components/CustomerLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
-import { supabase } from "@/lib/supabaseClient";
 import { toast } from "sonner";
 
 type Status =
@@ -57,15 +56,11 @@ export default function VerifyEmailPage() {
   const resend = useCallback(async () => {
     setResending(true);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const at = s?.session?.access_token;
+      // NextAuth session cookie carries auth — no bearer token needed.
       const res = await fetch("/api/auth/verify-email/resend", {
         method: "POST",
         credentials: "include",
-        headers: {
-          "content-type": "application/json",
-          ...(at ? { authorization: `Bearer ${at}` } : {}),
-        },
+        headers: { "content-type": "application/json" },
       });
       const body = await res.json().catch(() => ({}));
       if (res.status === 401) {

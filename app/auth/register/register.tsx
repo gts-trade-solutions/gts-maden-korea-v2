@@ -5,10 +5,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { signIn } from "next-auth/react";
-import { supabase } from "@/lib/supabaseClient";
-
-// Client auth-backend flag (mirrors server AUTH_BACKEND). Unset = Supabase.
-const NEXTAUTH = process.env.NEXT_PUBLIC_AUTH_BACKEND === "nextauth";
 import { CustomerLayout } from "@/components/CustomerLayout";
 import { Button } from "@/components/ui/button";
 import {
@@ -44,7 +40,6 @@ function readCountryFromCookie(): CountryCode {
   return isSupportedCountry(raw) ? raw : DEFAULT_COUNTRY;
 }
 
-// Browser Supabase client
 /* -------------------------------------------------------------------------- */
 /*                         PASSWORD VALIDATION HELPERS                        */
 /* -------------------------------------------------------------------------- */
@@ -188,22 +183,6 @@ export default function RegisterPage() {
   const onChange = (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((f) => ({ ...f, [e.target.name]: e.target.value }));
 
-  /* Attach SSR cookies */
-  const attachAfterAuth = async () => {
-    const { data: s } = await supabase.auth.getSession();
-    const at = s?.session?.access_token;
-    const rt = s?.session?.refresh_token;
-
-    if (!at || !rt) return;
-
-    await fetch("/api/auth/attach", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({ access_token: at, refresh_token: rt }),
-    }).catch(() => {});
-  };
-
   /* -------------------------------------------------------------------------- */
   /*                               OAUTH HANDLERS                               */
   /* -------------------------------------------------------------------------- */
@@ -213,25 +192,8 @@ export default function RegisterPage() {
 
       const redirectParam = redirect || "/account";
 
-      if (NEXTAUTH) {
-        // NextAuth drives the OAuth redirect + its own /api/auth/callback.
-        await signIn(provider, { callbackUrl: redirectParam });
-        return;
-      }
-
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider,
-        options: {
-          redirectTo: `${window.location.origin}/auth/callback?redirect=${encodeURIComponent(
-            redirectParam
-          )}`,
-        },
-      });
-
-      if (error) {
-        toast.error(error.message || `Could not start ${provider} sign in`);
-        setOauthLoading(null);
-      }
+      // NextAuth drives the OAuth redirect + its own /api/auth/callback.
+      await signIn(provider, { callbackUrl: redirectParam });
     } catch (err) {
       console.error(err);
       toast.error("Something went wrong, please try again.");
@@ -272,10 +234,8 @@ export default function RegisterPage() {
     const password = form.password;
 
     try {
-      // Dual-write registration (Option 1): the route creates the account in
-      // BOTH Supabase Auth and MySQL with the SAME id. Always-on during the
-      // transition so users registering now can also log in via NextAuth after
-      // the auth flip (and the vendor app keeps seeing them in Supabase).
+      // Registration creates the account in MySQL (NextAuth user row +
+      // profiles), then we sign the user in with NextAuth credentials below.
       const regRes = await fetch("/api/auth/register", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -294,44 +254,24 @@ export default function RegisterPage() {
         return;
       }
 
-      // Establish a session. Backend-aware: NextAuth at the flip, Supabase now.
-      if (NEXTAUTH) {
-        const si = await signIn("credentials", { email, password, redirect: false });
-        if (si?.error) {
-          toast.success(t("successToast"));
-          router.replace(`/auth/login?redirect=${encodeURIComponent(redirect)}`);
-          return;
-        }
-      } else {
-        const { error: siErr } = await supabase.auth.signInWithPassword({ email, password });
-        if (siErr) {
-          toast.success(t("successToast"));
-          router.replace(`/auth/login?redirect=${encodeURIComponent(redirect)}`);
-          return;
-        }
-        await attachAfterAuth();
+      // Establish a NextAuth session with the credentials just created.
+      const si = await signIn("credentials", { email, password, redirect: false });
+      if (si?.error) {
+        toast.success(t("successToast"));
+        router.replace(`/auth/login?redirect=${encodeURIComponent(redirect)}`);
+        return;
       }
 
-      // Build request headers — Supabase bearer for the legacy flow, none under
-      // NextAuth (the session cookie carries auth there).
-      const bearerHeaders = async (): Promise<Record<string, string>> => {
-        const h: Record<string, string> = { "content-type": "application/json" };
-        if (!NEXTAUTH) {
-          try {
-            const { data: s } = await supabase.auth.getSession();
-            const at = s?.session?.access_token;
-            if (at) h.Authorization = `Bearer ${at}`;
-          } catch {}
-        }
-        return h;
-      };
+      // Auth travels via the NextAuth session cookie — plain JSON headers,
+      // no bearer token needed.
+      const authHeaders: Record<string, string> = { "content-type": "application/json" };
 
       // Persist the chosen country to the profile + cookies (best-effort).
       try {
         await fetch("/api/me/country", {
           method: "POST",
           credentials: "include",
-          headers: await bearerHeaders(),
+          headers: authHeaders,
           body: JSON.stringify({ country }),
         });
       } catch {}
@@ -347,10 +287,9 @@ export default function RegisterPage() {
       // Custom verification email + welcome email — both best-effort.
       void (async () => {
         try {
-          const headers = await bearerHeaders();
           await Promise.all([
-            fetch("/api/auth/verify-email/resend", { method: "POST", credentials: "include", headers }),
-            fetch("/api/auth/welcome-email", { method: "POST", credentials: "include", headers }),
+            fetch("/api/auth/verify-email/resend", { method: "POST", credentials: "include", headers: authHeaders }),
+            fetch("/api/auth/welcome-email", { method: "POST", credentials: "include", headers: authHeaders }),
           ]);
         } catch {
           /* best-effort */

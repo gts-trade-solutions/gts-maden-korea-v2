@@ -1,11 +1,9 @@
 // app/influencer/layout.tsx
 import { ReactNode } from "react";
-import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import type { Metadata } from "next";
 import { getTranslations } from "next-intl/server";
-import { createServerComponentClient } from "@supabase/auth-helpers-nextjs";
 import { Header } from "@/components/Header";
 import { Footer } from "@/components/Footer";
 
@@ -19,20 +17,11 @@ export const metadata: Metadata = {
 
 export default async function InfluencerLayout({ children }: { children: ReactNode }) {
   const t = await getTranslations("influencer");
-  // Backend-aware identity (RSC): NextAuth session post-flip, Supabase sb-* cookie
-  // otherwise. Under NextAuth there is no sb-* cookie, so the old getUser() would
-  // wrongly redirect every influencer to login.
-  let userId: string | null = null;
-  if (process.env.AUTH_BACKEND === "nextauth") {
-    const { getServerSession } = await import("next-auth");
-    const { authOptions } = await import("@/lib/auth/authOptions");
-    const session = await getServerSession(authOptions);
-    userId = (session?.user as any)?.id ?? null;
-  } else {
-    const supabase = createServerComponentClient({ cookies });
-    const { data: { user } } = await supabase.auth.getUser();
-    userId = user?.id ?? null;
-  }
+  // Identity (RSC) via NextAuth session.
+  const { getServerSession } = await import("next-auth");
+  const { authOptions } = await import("@/lib/auth/authOptions");
+  const session = await getServerSession(authOptions);
+  const userId: string | null = (session?.user as any)?.id ?? null;
 
   // Not logged in → send to login with redirect back to /influencer
   if (!userId) {
