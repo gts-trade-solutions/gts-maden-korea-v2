@@ -10,8 +10,9 @@ import { requireEmailVerified } from "@/lib/auth/emailVerification";
 // Server-side password change. The old client flow used supabase.auth
 // (signInWithPassword + updateUser), which under AUTH_BACKEND=nextauth has no
 // Supabase session and never touched the MySQL hash that NextAuth verifies. This
-// route verifies `current` against prisma.user.passwordHash, updates that hash,
-// and best-effort dual-writes Supabase Auth so both backends stay in sync.
+// route verifies `current` against prisma.user.passwordHash and updates that
+// hash — the single credential store NextAuth's authorize() reads. Identity
+// comes from getRouteUser (→ getSessionUser under nextauth).
 const json = (d: any, s = 200) =>
   NextResponse.json(d, { status: s, headers: { "cache-control": "no-store" } });
 
@@ -48,16 +49,6 @@ export async function POST(req: Request) {
 
   const passwordHash = await bcrypt.hash(next, 10);
   await prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
-
-  // Dual-write Supabase Auth so the password also works if anything still reads
-  // the Supabase backend during the migration window. Best-effort.
-  try {
-    const { createServiceClient } = await import("@/lib/supabaseServer");
-    const sb = createServiceClient();
-    await sb.auth.admin.updateUserById(user.id, { password: next } as any);
-  } catch (e) {
-    console.error("[change-password] Supabase dual-write failed:", e);
-  }
 
   return json({ ok: true });
 }

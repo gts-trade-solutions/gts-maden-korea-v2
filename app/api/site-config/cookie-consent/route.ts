@@ -7,7 +7,7 @@
 // Bounded: 1..60 seconds. Outside that range falls back to 7.
 
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { prisma } from "@/lib/db/prisma";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,16 +16,13 @@ export async function GET() {
   let delaySeconds = 7;
   let scrollThreshold = 1;
   try {
-    const sb = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      { auth: { persistSession: false, autoRefreshToken: false } }
-    );
-    const { data } = await sb
-      .from("store_settings")
-      .select("cookie_consent_delay_seconds, cookie_consent_scroll_threshold")
-      .eq("id", 1)
-      .maybeSingle();
+    const data = await prisma.store_settings.findFirst({
+      where: { id: 1 },
+      select: {
+        cookie_consent_delay_seconds: true,
+        cookie_consent_scroll_threshold: true,
+      },
+    });
     const v = Number(data?.cookie_consent_delay_seconds);
     if (Number.isFinite(v) && v >= 1 && v <= 60) delaySeconds = Math.floor(v);
     const s = Number(data?.cookie_consent_scroll_threshold);

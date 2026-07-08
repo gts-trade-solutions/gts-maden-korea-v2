@@ -1,17 +1,15 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { createRouteHandlerClient } from "@supabase/auth-helpers-nextjs";
-import { cookies } from "next/headers";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+// Legacy Supabase OAuth code-exchange callback (was: exchangeCodeForSession).
+// Under AUTH_BACKEND=nextauth, OAuth is handled by NextAuth's own
+// /api/auth/callback/[provider] handler (the [...nextauth] catch-all), so this
+// exact path (/api/auth/callback, no provider segment) is no longer part of any
+// live flow. Kept as a safe redirect — no Supabase session exchange — rather
+// than deleted, in case a stale provider/bookmark redirect still points here.
 export async function GET(request: NextRequest) {
   const url = new URL(request.url);
-  const code = url.searchParams.get("code");
-
-  if (code) {
-    // Exchange the code for a session and set cookies
-    const supabase = createRouteHandlerClient({ cookies });
-    await supabase.auth.exchangeCodeForSession(code);
-  }
-
-  // redirect anywhere you like after auth completes
-  return NextResponse.redirect(new URL("/debug/whoami", url.origin));
+  return NextResponse.redirect(new URL("/account", url.origin));
 }

@@ -1,26 +1,12 @@
 // app/api/social/process-scheduled/route.ts
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { prisma } from "@/lib/db/prisma";
+import { randomUUID } from "node:crypto";
 
 const GRAPH_BASE = "https://graph.facebook.com/v21.0";
-
-// ---------- Supabase admin client ----------
-function getAdminSupabase() {
-  if (
-    !process.env.NEXT_PUBLIC_SUPABASE_URL ||
-    !process.env.SUPABASE_SERVICE_ROLE_KEY
-  ) {
-    throw new Error(
-      "Supabase URL or SERVICE_ROLE key missing in environment variables"
-    );
-  }
-
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY,
-    { auth: { persistSession: false } }
-  );
-}
 
 // Optional admin owner lock (same as other routes)
 const ADMIN_OWNER_ID = process.env.FB_OWNER_ID || null;
@@ -88,7 +74,7 @@ async function waitForContainerReady(
 }
 
 // Resolve IG Business account (same as /api/instagram/media)
-async function resolveInstagramBusinessIdAdmin(supabase: any) {
+async function resolveInstagramBusinessIdAdmin() {
   if (STATIC_IG_BUSINESS_ID && STATIC_IG_ACCESS_TOKEN) {
     return {
       userId: STATIC_IG_OWNER_ID,
@@ -97,21 +83,23 @@ async function resolveInstagramBusinessIdAdmin(supabase: any) {
     };
   }
 
-  let query = supabase
-    .from("instagram_accounts")
-    .select(
-      "id, owner_id, ig_business_account_id, facebook_page_id, access_token"
-    )
-    .eq("is_active", true)
-    .order("created_at", { ascending: false })
-    .limit(1);
-
-  if (ADMIN_OWNER_ID) {
-    query = query.eq("owner_id", ADMIN_OWNER_ID);
-  }
-
-  const { data: account, error: accError } = await query.maybeSingle();
-  if (accError) {
+  let account: any;
+  try {
+    account = await prisma.instagram_accounts.findFirst({
+      where: {
+        is_active: true,
+        ...(ADMIN_OWNER_ID ? { owner_id: ADMIN_OWNER_ID } : {}),
+      },
+      select: {
+        id: true,
+        owner_id: true,
+        ig_business_account_id: true,
+        facebook_page_id: true,
+        access_token: true,
+      },
+      orderBy: { created_at: "desc" },
+    });
+  } catch (accError) {
     console.error("instagram_accounts error:", accError);
     throw new Error(
       "Failed to load Instagram account config from database (check instagram_accounts table)."
@@ -170,12 +158,12 @@ async function resolveInstagramBusinessIdAdmin(supabase: any) {
 
     igId = newIgId;
 
-    const { error: updateError } = await supabase
-      .from("instagram_accounts")
-      .update({ ig_business_account_id: igId })
-      .eq("id", account.id);
-
-    if (updateError) {
+    try {
+      await prisma.instagram_accounts.update({
+        where: { id: account.id },
+        data: { ig_business_account_id: igId },
+      });
+    } catch (updateError) {
       console.error(
         "Failed to update ig_business_account_id in instagram_accounts:",
         updateError
@@ -193,27 +181,28 @@ async function resolveInstagramBusinessIdAdmin(supabase: any) {
 }
 
 // Resolve Facebook Page + token from instagram_accounts
-async function resolveFacebookPageConfig(
-  supabase: any,
-  ownerIdFromJob?: string
-) {
-  let query = supabase
-    .from("instagram_accounts")
-    .select(
-      "id, owner_id, facebook_page_id, page_access_token, ig_business_account_id"
-    )
-    .eq("is_active", true)
-    .order("created_at", { ascending: false })
-    .limit(1);
-
-  if (ownerIdFromJob) {
-    query = query.eq("owner_id", ownerIdFromJob);
-  } else if (ADMIN_OWNER_ID) {
-    query = query.eq("owner_id", ADMIN_OWNER_ID);
-  }
-
-  const { data: account, error } = await query.maybeSingle();
-  if (error) {
+async function resolveFacebookPageConfig(ownerIdFromJob?: string) {
+  let account: any;
+  try {
+    account = await prisma.instagram_accounts.findFirst({
+      where: {
+        is_active: true,
+        ...(ownerIdFromJob
+          ? { owner_id: ownerIdFromJob }
+          : ADMIN_OWNER_ID
+          ? { owner_id: ADMIN_OWNER_ID }
+          : {}),
+      },
+      select: {
+        id: true,
+        owner_id: true,
+        facebook_page_id: true,
+        page_access_token: true,
+        ig_business_account_id: true,
+      },
+      orderBy: { created_at: "desc" },
+    });
+  } catch (error) {
     console.error("instagram_accounts FB config error:", error);
     throw new Error(
       "Failed to load Facebook Page config from instagram_accounts table."
@@ -234,17 +223,14 @@ async function resolveFacebookPageConfig(
 
 // ---------- Publish helpers ----------
 
-async function publishInstagramPost(
-  supabase: any,
-  job: any
-): Promise<{ ig_media_id: string }> {
+async function publishInstagramPost(job: any): Promise<{ ig_media_id: string }> {
   const { message, media_url, media_type } = job;
   if (!media_url) {
     throw new Error("Scheduled Instagram post missing media_url.");
   }
 
   const { userId, igId, accessToken: igToken } =
-    await resolveInstagramBusinessIdAdmin(supabase);
+    await resolveInstagramBusinessIdAdmin();
 
   // 1) Create media container
   const containerUrl = new URL(
@@ -358,43 +344,59 @@ async function publishInstagramPost(
     media_url,
   };
 
-  const record = {
-    owner_id: userId,
-    ig_business_account_id: igId,
-    ig_media_id: media.id,
-    caption: media.caption || message || null,
-    media_type: media.media_type || type || null,
-    media_url: media.media_url || media_url || null,
-    thumbnail_url: media.thumbnail_url || null,
-    permalink: media.permalink || null,
-    like_count:
-      typeof media.like_count === "number" ? media.like_count : null,
-    comments_count:
-      typeof media.comments_count === "number" ? media.comments_count : null,
-    timestamp: media.timestamp
-      ? new Date(media.timestamp).toISOString()
-      : new Date().toISOString(),
-  };
+  const caption = media.caption || message || null;
+  const mediaType = media.media_type || type || null;
+  const mediaUrl = media.media_url || media_url || null;
+  const thumbnailUrl = media.thumbnail_url || null;
+  const permalink = media.permalink || null;
+  const likeCount =
+    typeof media.like_count === "number" ? media.like_count : null;
+  const commentsCount =
+    typeof media.comments_count === "number" ? media.comments_count : null;
+  const timestamp = media.timestamp ? new Date(media.timestamp) : new Date();
 
-  const { error: upsertError } = await supabase
-    .from("instagram_media_posts")
-    .upsert(record, { onConflict: "owner_id,ig_media_id" });
-
-  if (upsertError) {
+  try {
+    await prisma.instagram_media_posts.upsert({
+      where: {
+        owner_id_ig_media_id: { owner_id: userId, ig_media_id: media.id },
+      },
+      create: {
+        id: randomUUID(),
+        owner_id: userId,
+        ig_business_account_id: igId,
+        ig_media_id: media.id,
+        caption,
+        media_type: mediaType,
+        media_url: mediaUrl,
+        thumbnail_url: thumbnailUrl,
+        permalink,
+        like_count: likeCount,
+        comments_count: commentsCount,
+        timestamp,
+      },
+      update: {
+        ig_business_account_id: igId,
+        caption,
+        media_type: mediaType,
+        media_url: mediaUrl,
+        thumbnail_url: thumbnailUrl,
+        permalink,
+        like_count: likeCount,
+        comments_count: commentsCount,
+        timestamp,
+      },
+    });
+  } catch (upsertError) {
     console.error("Upsert error instagram_media_posts:", upsertError);
   }
 
   return { ig_media_id: igMediaId };
 }
 
-async function publishFacebookPost(
-  supabase: any,
-  job: any
-): Promise<{ fb_post_id: string }> {
-  const { message, media_url, media_type, owner_id } = job;
+async function publishFacebookPost(job: any): Promise<{ fb_post_id: string }> {
+  const { message, media_url, owner_id } = job;
 
   const { pageId, pageToken, ownerId } = await resolveFacebookPageConfig(
-    supabase,
     owner_id
   );
 
@@ -496,26 +498,44 @@ async function publishFacebookPost(
 
   const p = detailJson || { id: fbPostId, message };
 
-  const record = {
-    owner_id: ownerId,
-    facebook_page_id: pageId,
-    fb_post_id: p.id,
-    message: p.message || message || null,
-    permalink_url: p.permalink_url || null,
-    attachments: p.attachments || null,
-    created_time: p.created_time
-      ? new Date(p.created_time).toISOString()
-      : new Date().toISOString(),
-    insights: p.insights || null,
-    reactions_count: p.reactions?.summary?.total_count ?? null,
-    comments_count: p.comments?.summary?.total_count ?? null,
-  };
+  const messageVal = p.message || message || null;
+  const permalinkUrl = p.permalink_url || null;
+  const attachments = p.attachments ?? null;
+  const createdTime = p.created_time ? new Date(p.created_time) : new Date();
+  const insights = p.insights ?? null;
+  const reactionsCount = p.reactions?.summary?.total_count ?? null;
+  const commentsCount = p.comments?.summary?.total_count ?? null;
 
-  const { error: upsertError } = await supabase
-    .from("facebook_page_posts")
-    .upsert(record, { onConflict: "owner_id,fb_post_id" });
-
-  if (upsertError) {
+  try {
+    await prisma.facebook_page_posts.upsert({
+      where: {
+        owner_id_fb_post_id: { owner_id: ownerId, fb_post_id: p.id },
+      },
+      create: {
+        id: randomUUID(),
+        owner_id: ownerId,
+        facebook_page_id: pageId,
+        fb_post_id: p.id,
+        message: messageVal,
+        permalink_url: permalinkUrl,
+        attachments,
+        created_time: createdTime,
+        insights,
+        reactions_count: reactionsCount,
+        comments_count: commentsCount,
+      },
+      update: {
+        facebook_page_id: pageId,
+        message: messageVal,
+        permalink_url: permalinkUrl,
+        attachments,
+        created_time: createdTime,
+        insights,
+        reactions_count: reactionsCount,
+        comments_count: commentsCount,
+      },
+    });
+  } catch (upsertError) {
     console.error("Upsert error facebook_page_posts:", upsertError);
   }
 
@@ -526,68 +546,63 @@ async function publishFacebookPost(
 
 export async function POST() {
   try {
-    const supabase = getAdminSupabase();
-    const nowIso = new Date().toISOString();
+    const now = new Date();
 
     // Grab a small batch of due jobs
-    const { data: jobs, error } = await supabase
-      .from("social_scheduled_posts")
-      .select("*")
-      .eq("status", "pending")
-      .lte("scheduled_at", nowIso)
-      .order("scheduled_at", { ascending: true })
-      .limit(5);
-
-    if (error) {
+    let jobs: any[];
+    try {
+      jobs = await prisma.social_scheduled_posts.findMany({
+        where: { status: "pending", scheduled_at: { lte: now } },
+        orderBy: { scheduled_at: "asc" },
+        take: 5,
+      });
+    } catch (error: any) {
       console.error("Error loading pending schedules:", error);
       return NextResponse.json(
         {
           error: "Failed to load pending scheduled posts",
-          details: error.message || String(error),
+          details: error?.message || String(error),
         },
         { status: 500 }
       );
     }
 
     if (!jobs || jobs.length === 0) {
-      return NextResponse.json(
-        { processed: 0, results: [] },
-        { status: 200 }
-      );
+      return NextResponse.json({ processed: 0, results: [] }, { status: 200 });
     }
 
     const results: any[] = [];
 
     for (const job of jobs) {
       // mark as processing
-      await supabase
-        .from("social_scheduled_posts")
-        .update({ status: "processing", last_error: null, error_message: null })
-        .eq("id", job.id);
+      await prisma.social_scheduled_posts.update({
+        where: { id: job.id },
+        data: { status: "processing", last_error: null, error_message: null },
+      });
 
       try {
         if (job.platform === "instagram") {
-          const { ig_media_id } = await publishInstagramPost(supabase, job);
-          await supabase
-            .from("social_scheduled_posts")
-            .update({
+          const { ig_media_id } = await publishInstagramPost(job);
+          await prisma.social_scheduled_posts.update({
+            where: { id: job.id },
+            data: {
               status: "posted",
               ig_media_id,
-              posted_at: new Date().toISOString(),
-            })
-            .eq("id", job.id);
+              posted_at: new Date(),
+            },
+          });
 
           results.push({ id: job.id, ok: true, platform: "instagram" });
         } else if (job.platform === "facebook") {
-          const { fb_post_id } = await publishFacebookPost(supabase, job);
-          await supabase
-            .from("social_scheduled_posts")
-            .update({
+          const { fb_post_id } = await publishFacebookPost(job);
+          await prisma.social_scheduled_posts.update({
+            where: { id: job.id },
+            data: {
               status: "posted",
               fb_post_id,
-              posted_at: new Date().toISOString(),
-            })
-            .eq("id", job.id);
+              posted_at: new Date(),
+            },
+          });
 
           results.push({ id: job.id, ok: true, platform: "facebook" });
         } else {
@@ -596,14 +611,14 @@ export async function POST() {
       } catch (err: any) {
         console.error("scheduled post failed", job.id, err);
         const msg = err?.message || String(err);
-        await supabase
-          .from("social_scheduled_posts")
-          .update({
+        await prisma.social_scheduled_posts.update({
+          where: { id: job.id },
+          data: {
             status: "failed",
             last_error: msg,
             error_message: msg,
-          })
-          .eq("id", job.id);
+          },
+        });
 
         results.push({ id: job.id, ok: false, error: msg });
       }

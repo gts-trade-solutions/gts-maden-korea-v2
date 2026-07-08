@@ -1,15 +1,17 @@
 // app/api/auth/attach/route.ts
+//
+// Legacy Supabase → server-cookie bridge. Under AUTH_BACKEND=nextauth this is
+// obsolete: NextAuth manages its own session cookie, so there is no Supabase
+// session to attach. Kept as a safe no-op (returns { ok: true }) so the client
+// callers that still POST here — /auth/login, /auth/register, /auth/callback,
+// /influencer-request — don't error. Those callers only fire this when a
+// Supabase session exists (which it never does under NextAuth) and ignore the
+// response anyway, so returning ok:true unconditionally is safe.
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { createRouteHandlerClient } from "@supabase/auth-helpers-nextjs";
 
-export async function POST(req: Request) {
-  const { access_token, refresh_token } = await req.json().catch(() => ({}));
-  if (!access_token || !refresh_token) {
-    return NextResponse.json({ ok: false, error: "MISSING_TOKENS" }, { status: 400 });
-  }
-  const supabase = createRouteHandlerClient({ cookies });
-  const { error } = await supabase.auth.setSession({ access_token, refresh_token });
-  if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+export async function POST() {
   return NextResponse.json({ ok: true });
 }

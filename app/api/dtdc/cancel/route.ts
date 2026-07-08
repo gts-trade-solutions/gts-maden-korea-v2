@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import supabaseAdmin from "@/lib/supabaseAdmin";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import { dtdcCancelConsignment, DTDC_SHIPSY } from "@/lib/dtdc";
 
 const NON_CANCELABLE = new Set([
@@ -21,22 +22,13 @@ export async function POST(req: NextRequest) {
     let shipment: any = null;
 
     if (shipment_id) {
-      const { data, error } = await supabaseAdmin
-        .from("dtdc_shipments")
-        .select("*")
-        .eq("id", shipment_id)
-        .maybeSingle();
-      if (error) throw new Error(error.message);
-      shipment = data;
+      shipment = await prisma.dtdc_shipments.findFirst({
+        where: { id: shipment_id },
+      });
     } else {
-      const { data, error } = await supabaseAdmin
-        .from("dtdc_shipments")
-        .select("*")
-        .eq("order_id", order_id)
-        .eq("is_active", true)
-        .maybeSingle();
-      if (error) throw new Error(error.message);
-      shipment = data;
+      shipment = await prisma.dtdc_shipments.findFirst({
+        where: { order_id, is_active: true },
+      });
     }
 
     if (!shipment?.id) throw new Error("DTDC shipment not found");
@@ -47,10 +39,10 @@ export async function POST(req: NextRequest) {
     }
 
     // 2) Mark cancel requested (optional but nice)
-    await supabaseAdmin
-      .from("dtdc_shipments")
-      .update({ status: "cancel_requested" })
-      .eq("id", shipment.id);
+    await prisma.dtdc_shipments.updateMany({
+      where: { id: shipment.id },
+      data: { status: "cancel_requested" },
+    });
 
     // 3) Call DTDC cancel API
     const cancelReq = {
@@ -73,34 +65,30 @@ export async function POST(req: NextRequest) {
         resp?.message ||
         "DTDC cancel failed";
 
-      await supabaseAdmin
-        .from("dtdc_shipments")
-        .update({
+      await prisma.dtdc_shipments.updateMany({
+        where: { id: shipment.id },
+        data: {
           status: "failed",
           dtdc_response: resp,
           last_error: msg,
-        })
-        .eq("id", shipment.id);
+        },
+      });
 
       return NextResponse.json({ ok: false, error: msg, resp }, { status: 400 });
     }
 
     // 4) Update shipment as cancelled + deactivate
-    const upd = await supabaseAdmin
-      .from("dtdc_shipments")
-      .update({
+    const updated = await prisma.dtdc_shipments.update({
+      where: { id: shipment.id },
+      data: {
         status: "cancelled",
         is_active: false,
         dtdc_response: resp,
         last_error: null,
-      })
-      .eq("id", shipment.id)
-      .select("*")
-      .single();
+      },
+    });
 
-    if (upd.error) throw new Error(upd.error.message);
-
-    return NextResponse.json({ ok: true, shipment: upd.data, resp });
+    return NextResponse.json({ ok: true, shipment: jsonSafe(updated), resp });
   } catch (e: any) {
     return NextResponse.json(
       { ok: false, error: e?.message || "Cancel shipment failed" },

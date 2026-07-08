@@ -1,24 +1,37 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { prisma } from "@/lib/db/prisma";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY! // MUST use service role
-);
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
+// Facebook data-deletion callback. Deletes the NextAuth user linked to the
+// given Facebook provider UID. Under MySQL/NextAuth the Facebook identity lives
+// in auth_accounts (provider="facebook", provider_account_id=<facebook_id>);
+// deleting the parent auth_users row cascades to accounts + sessions.
 export async function POST(req: Request) {
   try {
     const { facebook_id } = await req.json();
 
     if (!facebook_id) {
-      return NextResponse.json({ error: "facebook_id required" }, { status: 400 });
+      return NextResponse.json(
+        { error: "facebook_id required" },
+        { status: 400 }
+      );
     }
 
-    // Delete user by Facebook provider UID
-    const { error } = await supabase.auth.admin.deleteUser(facebook_id);
+    const account = await prisma.account.findUnique({
+      where: {
+        provider_providerAccountId: {
+          provider: "facebook",
+          providerAccountId: String(facebook_id),
+        },
+      },
+      select: { userId: true },
+    });
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
+    // Idempotent: if there's no linked user, treat the deletion as satisfied.
+    if (account) {
+      await prisma.user.delete({ where: { id: account.userId } });
     }
 
     return NextResponse.json({ success: true });

@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServiceClient } from "@/lib/supabaseServer";
+import { randomUUID } from "node:crypto";
+import { prisma } from "@/lib/db/prisma";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
-  const supabase = createServiceClient();
   const url = new URL(req.url);
   const email = url.searchParams.get("email");
   const cid = url.searchParams.get("cid"); // campaign id (optional)
@@ -19,16 +19,19 @@ export async function GET(req: NextRequest) {
 
   const emailLower = email.trim().toLowerCase();
 
-  await supabase
-    .from("email_unsubscribe")
-    .upsert(
-      {
-        email: emailLower,
-        source: "user",
-        campaign_id: cid || null,
-      },
-      { onConflict: "email" }
-    );
+  await prisma.email_unsubscribe.upsert({
+    where: { email: emailLower },
+    create: {
+      id: randomUUID(),
+      email: emailLower,
+      source: "user",
+      campaign_id: cid || null,
+    },
+    update: {
+      source: "user",
+      campaign_id: cid || null,
+    },
+  });
 
   const html = `
     <!DOCTYPE html>

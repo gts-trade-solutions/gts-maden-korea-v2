@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import supabaseAdmin from "@/lib/supabaseAdmin";
+import { prisma } from "@/lib/db/prisma";
 import { dtdcGetLabel } from "@/lib/dtdc";
 
 export async function GET(req: NextRequest) {
@@ -25,22 +25,13 @@ export async function GET(req: NextRequest) {
     let shipment: any = null;
 
     if (shipment_id) {
-      const { data, error } = await supabaseAdmin
-        .from("dtdc_shipments")
-        .select("*")
-        .eq("id", shipment_id)
-        .maybeSingle();
-      if (error) throw new Error(error.message);
-      shipment = data;
+      shipment = await prisma.dtdc_shipments.findFirst({
+        where: { id: shipment_id },
+      });
     } else {
-      const { data, error } = await supabaseAdmin
-        .from("dtdc_shipments")
-        .select("*")
-        .eq("order_id", order_id)
-        .eq("is_active", true)
-        .maybeSingle();
-      if (error) throw new Error(error.message);
-      shipment = data;
+      shipment = await prisma.dtdc_shipments.findFirst({
+        where: { order_id, is_active: true },
+      });
     }
 
     if (!shipment?.id) throw new Error("DTDC shipment not found. Create shipment first.");
@@ -57,15 +48,15 @@ export async function GET(req: NextRequest) {
     );
 
     // 3) Update DB: mark label generated + store last label details
-    await supabaseAdmin
-      .from("dtdc_shipments")
-      .update({
+    await prisma.dtdc_shipments.updateMany({
+      where: { id: shipment.id },
+      data: {
         last_label_code: label_code,
         last_label_format: label_format,
-        label_last_generated_at: new Date().toISOString(),
+        label_last_generated_at: new Date(),
         status: shipment.status === "created" ? "label_generated" : shipment.status,
-      })
-      .eq("id", shipment.id);
+      },
+    });
 
     // 4) Return PDF stream
     const isPdf = label_format === "pdf" || contentType.includes("pdf");

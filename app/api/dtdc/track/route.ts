@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import supabaseAdmin from "@/lib/supabaseAdmin";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
+import { randomUUID } from "node:crypto";
 import { dtdcGetTrackDetails } from "@/lib/dtdc";
 
 function parseEventAt(dateStr?: string, timeStr?: string): string | null {
@@ -66,14 +68,10 @@ export async function GET(req: NextRequest) {
     }
 
     // 1) Load active shipment
-    const { data: shipment, error: sErr } = await supabaseAdmin
-      .from("dtdc_shipments")
-      .select("*")
-      .eq("order_id", order_id)
-      .eq("is_active", true)
-      .maybeSingle();
+    const shipment = await prisma.dtdc_shipments.findFirst({
+      where: { order_id, is_active: true },
+    });
 
-    if (sErr) throw new Error(sErr.message);
     if (!shipment?.reference_number) {
       return NextResponse.json(
         { ok: false, error: "No active DTDC shipment/AWB found for this order" },
@@ -106,20 +104,35 @@ export async function GET(req: NextRequest) {
       const eventAtIso =
         parseEventAt(ev?.strActionDate || ev?.actionDate, ev?.strActionTime || ev?.actionTime) ||
         null;
+      const eventAt = eventAtIso ? new Date(eventAtIso) : null;
 
-      await supabaseAdmin.from("dtdc_shipment_events").upsert(
-        {
-          shipment_id: shipment.id,
-          event_at: eventAtIso,
-          action,
-          origin,
-          destination,
-          remarks,
-          status_code,
-          raw: ev,
-        },
-        { onConflict: "shipment_id,event_at,action" }
-      );
+      // Manual upsert on the (shipment_id, event_at, action) dedup key.
+      // event_at can be null, which a compound-unique upsert can't express,
+      // so we find-then-create/update to preserve the old onConflict behavior.
+      const existing = await prisma.dtdc_shipment_events.findFirst({
+        where: { shipment_id: shipment.id, event_at: eventAt, action },
+        select: { id: true },
+      });
+      if (existing) {
+        await prisma.dtdc_shipment_events.update({
+          where: { id: existing.id },
+          data: { origin, destination, remarks, status_code, raw: ev },
+        });
+      } else {
+        await prisma.dtdc_shipment_events.create({
+          data: {
+            id: randomUUID(),
+            shipment_id: shipment.id,
+            event_at: eventAt,
+            action,
+            origin,
+            destination,
+            remarks,
+            status_code,
+            raw: ev,
+          },
+        });
+      }
     }
 
     // 5) Update shipment status if we can infer from latest event
@@ -127,53 +140,53 @@ export async function GET(req: NextRequest) {
     const inferred = mapShipmentStatus(latest?.strAction || latest?.action);
 
     if (inferred && inferred !== shipment.status) {
-      await supabaseAdmin
-        .from("dtdc_shipments")
-        .update({ status: inferred })
-        .eq("id", shipment.id);
+      await prisma.dtdc_shipments.updateMany({
+        where: { id: shipment.id },
+        data: { status: inferred },
+      });
     }
 
     // 5b) Keep order status in sync with shipment progress.
     const mappedOrderStatus = mapOrderStatusFromShipment(inferred || shipment.status);
     if (mappedOrderStatus) {
-      const { data: ord } = await supabaseAdmin
-        .from("orders")
-        .select("id,status")
-        .eq("id", order_id)
-        .maybeSingle();
+      const ord = await prisma.orders.findFirst({
+        where: { id: order_id },
+        select: { id: true, status: true },
+      });
 
       const current = ord?.status || null;
       const terminal = current === "delivered" || current === "cancelled" || current === "returned";
 
       if (!terminal && current !== mappedOrderStatus) {
-        await supabaseAdmin
-          .from("orders")
-          .update({ status: mappedOrderStatus })
-          .eq("id", order_id);
-
-        // Dual-write: mirror the order status into MySQL (account pages read it).
-        try {
-          const { mirrorTableToMysql } = await import("@/lib/data/mirror");
-          await mirrorTableToMysql("orders", order_id);
-        } catch (e) {
-          console.error("[dual-write] dtdc track order status MySQL mirror failed:", e);
-        }
+        // Writes MySQL directly (authoritative for account pages), so the old
+        // Supabase→MySQL dual-write mirror is no longer needed.
+        await prisma.orders.updateMany({
+          where: { id: order_id },
+          data: { status: mappedOrderStatus },
+        });
       }
     }
 
     // 6) Read events back (sorted)
-    const { data: events } = await supabaseAdmin
-      .from("dtdc_shipment_events")
-      .select("event_at, action, origin, destination, remarks, status_code")
-      .eq("shipment_id", shipment.id)
-      .order("event_at", { ascending: false });
+    const events = await prisma.dtdc_shipment_events.findMany({
+      where: { shipment_id: shipment.id },
+      select: {
+        event_at: true,
+        action: true,
+        origin: true,
+        destination: true,
+        remarks: true,
+        status_code: true,
+      },
+      orderBy: { event_at: "desc" },
+    });
 
     return NextResponse.json({
       ok: true,
       awb: shipment.reference_number,
       shipment_status: inferred || shipment.status,
       raw: trackJson,
-      events: events ?? [],
+      events: jsonSafe(events) ?? [],
     });
   } catch (e: any) {
     return NextResponse.json(

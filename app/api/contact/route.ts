@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServiceClient } from "@/lib/supabaseServer";
+import { prisma } from "@/lib/db/prisma";
 import { sendEmail } from "@/lib/ses";
 import { getAdminRecipientEmails } from "@/lib/notificationRecipients";
 import { createAdminNotification } from "@/lib/admin/notifications";
@@ -26,17 +26,18 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const supabase = createServiceClient();
-    const { error } = await supabase.from("contact_messages").insert({
-      name,
-      email,
-      subject: subject || null,
-      message,
-      status: "new",
-    });
-
-    if (error) {
-      console.error("[contact] insert failed:", error);
+    try {
+      await prisma.contact_messages.create({
+        data: {
+          name,
+          email,
+          subject: subject || null,
+          message,
+          status: "new",
+        },
+      });
+    } catch (insertError) {
+      console.error("[contact] insert failed:", insertError);
       return NextResponse.json(
         {
           success: false,

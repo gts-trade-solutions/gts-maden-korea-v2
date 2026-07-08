@@ -1,26 +1,11 @@
 // app/api/social/schedule/route.ts
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
-
-// Re-use the same admin pattern as other social routes
-function getAdminSupabase() {
-  if (
-    !process.env.NEXT_PUBLIC_SUPABASE_URL ||
-    !process.env.SUPABASE_SERVICE_ROLE_KEY
-  ) {
-    throw new Error(
-      "Supabase URL or SERVICE_ROLE key missing in environment variables"
-    );
-  }
-
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY,
-    {
-      auth: { persistSession: false },
-    }
-  );
-}
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
+import { randomUUID } from "node:crypto";
 
 // Use a fixed owner for scheduled jobs (same idea as IG routes)
 const DEFAULT_OWNER_ID =
@@ -29,11 +14,8 @@ const DEFAULT_OWNER_ID =
   process.env.INSTAGRAM_OWNER_ID ||
   "00000000-0000-0000-0000-000000000000";
 
-
-  
 export async function POST(req: Request) {
   try {
-    const supabase = getAdminSupabase();
     const body = await req.json();
 
     let {
@@ -92,44 +74,30 @@ export async function POST(req: Request) {
       );
     }
 
-    const row = {
-      owner_id: DEFAULT_OWNER_ID,
-      platform, // 'instagram' | 'facebook'
-      channel,  // e.g. 'instagram', 'facebook_page'
-      message: text || null,
-      media_url: media_url || null,
-      media_type: media_type || null,
-      scheduled_at: scheduledDate.toISOString(),
-      status: "pending" as const,
-      payload: {
-        ...(payload || {}),
-        platform,
-        channel,
-        caption: caption ?? null,
-        message: message ?? null,
-        media_url: media_url ?? null,
-        media_type: media_type ?? null,
-      },
-    };
-
-    const { data, error } = await supabase
-      .from("social_scheduled_posts")
-      .insert(row)
-      .select("*")
-      .single();
-
-    if (error) {
-      console.error("Error inserting into social_scheduled_posts:", error);
-      return NextResponse.json(
-        {
-          error: "Failed to schedule post",
-          details: error.message || String(error),
+    const data = await prisma.social_scheduled_posts.create({
+      data: {
+        id: randomUUID(),
+        owner_id: DEFAULT_OWNER_ID,
+        platform, // 'instagram' | 'facebook'
+        channel, // e.g. 'instagram', 'facebook_page'
+        message: text || null,
+        media_url: media_url || null,
+        media_type: media_type || null,
+        scheduled_at: scheduledDate,
+        status: "pending",
+        payload: {
+          ...(payload || {}),
+          platform,
+          channel,
+          caption: caption ?? null,
+          message: message ?? null,
+          media_url: media_url ?? null,
+          media_type: media_type ?? null,
         },
-        { status: 500 }
-      );
-    }
+      },
+    });
 
-    return NextResponse.json({ data }, { status: 200 });
+    return NextResponse.json({ data: jsonSafe(data) }, { status: 200 });
   } catch (err: any) {
     console.error("POST /api/social/schedule error", err);
     return NextResponse.json(

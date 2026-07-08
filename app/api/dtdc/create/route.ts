@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import supabaseAdmin from "@/lib/supabaseAdmin";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import { createDtdcShipmentForOrder } from "@/lib/dtdc/createShipmentForOrder";
 
 export async function POST(req: NextRequest) {
@@ -13,28 +14,25 @@ export async function POST(req: NextRequest) {
     }
 
     // 1. Check if an active shipment already exists for this order
-    const { data: existingShipment, error: existingShipmentError } = await supabaseAdmin
-      .from('dtdc_shipments')
-      .select('*')
-      .eq('order_id', order_id)
-      .eq('is_active', true)
-      .maybeSingle();
+    const existingShipment = await prisma.dtdc_shipments.findFirst({
+      where: { order_id, is_active: true },
+    });
 
     // 2. If active shipment exists and we're not forcing a new one, reuse it
     if (existingShipment && !force_new) {
-      return NextResponse.json({ ok: true, shipment: existingShipment, reused: true });
+      return NextResponse.json({ ok: true, shipment: jsonSafe(existingShipment), reused: true });
     }
 
     // 3. If we're forcing a new shipment, deactivate the existing active shipment
     if (existingShipment && force_new) {
-      await supabaseAdmin
-        .from('dtdc_shipments')
-        .update({ is_active: false, status: 'failed', last_error: 'Recreated by admin' })
-        .eq('id', existingShipment.id);
+      await prisma.dtdc_shipments.updateMany({
+        where: { id: existingShipment.id },
+        data: { is_active: false, status: "failed", last_error: "Recreated by admin" },
+      });
     }
 
     // 4. Proceed to create a new shipment
-    const result = await createDtdcShipmentForOrder(supabaseAdmin, order_id, {
+    const result = await createDtdcShipmentForOrder(prisma, order_id, {
       mode: "test",
       force_new,
       is_cod: !!body?.is_cod,
@@ -45,7 +43,7 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     // Log the error in detail
     console.error("Error during shipment creation: ", e);
-    
+
     // Return a detailed error response
     return NextResponse.json(
       { ok: false, error: e?.message || JSON.stringify(e) || "Failed to create DTDC shipment" },
@@ -53,4 +51,3 @@ export async function POST(req: NextRequest) {
     );
   }
 }
-

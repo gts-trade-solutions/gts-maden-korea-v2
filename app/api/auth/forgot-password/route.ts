@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
-import { createServiceClient } from "@/lib/supabaseServer";
+import { prisma } from "@/lib/db/prisma";
 import { sendEmail } from "@/lib/ses";
 import { getEmailTranslator } from "@/lib/i18n/email";
 
@@ -21,30 +21,6 @@ function isValidEmail(email: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
-async function findAuthUserByEmail(supabase: any, email: string) {
-  const target = email.toLowerCase();
-  const perPage = 200;
-  let page = 1;
-
-  while (page <= 20) {
-    const { data, error } = await supabase.auth.admin.listUsers({
-      page,
-      perPage,
-    });
-    if (error) throw error;
-
-    const users = data?.users ?? [];
-    const found = users.find(
-      (u: any) => (u?.email || "").toLowerCase() === target
-    );
-    if (found) return found;
-    if (users.length < perPage) break;
-    page += 1;
-  }
-
-  return null;
-}
-
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
@@ -59,8 +35,10 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const supabase = createServiceClient();
-    const user = await findAuthUserByEmail(supabase as any, email);
+    // Identity now lives in MySQL (Prisma `User` / auth_users). We only issue a
+    // token when the email maps to a real account; otherwise fall through to the
+    // generic response so we never leak which emails are registered.
+    const user = await prisma.user.findUnique({ where: { email } });
 
     let deliveryStatus: "accepted" | "sent" | "failed" = "accepted";
     let success = true;
@@ -70,15 +48,16 @@ export async function POST(req: NextRequest) {
       const token = crypto.randomBytes(32).toString("hex");
       const tokenHash = hashToken(token);
       const now = new Date();
-      const expiresAt = new Date(now.getTime() + 1000 * 60 * 30).toISOString();
+      const expiresAt = new Date(now.getTime() + 1000 * 60 * 30);
 
-      const { error: invalidateError } = await supabase
-        .from("password_reset_tokens")
-        .update({ used_at: now.toISOString() })
-        .eq("email", email)
-        .is("used_at", null);
-
-      if (invalidateError) {
+      try {
+        // Invalidate any outstanding unused tokens for this email so only the
+        // freshest link works.
+        await prisma.password_reset_tokens.updateMany({
+          where: { email, used_at: null },
+          data: { used_at: now },
+        });
+      } catch (invalidateError) {
         console.error("[forgot-password] token invalidate failed:", invalidateError);
         return NextResponse.json({
           success: false,
@@ -87,15 +66,25 @@ export async function POST(req: NextRequest) {
         });
       }
 
-      const { error: insertError } = await supabase
-        .from("password_reset_tokens")
-        .insert({
-          email,
-          token_hash: tokenHash,
-          expires_at: expiresAt,
+      let insertOk = true;
+      try {
+        // id is BigInt autoincrement in the schema — let the DB assign it.
+        await prisma.password_reset_tokens.create({
+          data: {
+            email,
+            token_hash: tokenHash,
+            expires_at: expiresAt,
+          },
         });
+      } catch (insertError) {
+        insertOk = false;
+        console.error("[forgot-password] token insert failed:", insertError);
+        success = false;
+        message = DELIVERY_FAILURE_MESSAGE;
+        deliveryStatus = "failed";
+      }
 
-      if (!insertError) {
+      if (insertOk) {
         const appBase =
           process.env.NEXT_PUBLIC_APP_URL ||
           process.env.APP_URL ||
@@ -190,11 +179,6 @@ export async function POST(req: NextRequest) {
           message = DELIVERY_FAILURE_MESSAGE;
           deliveryStatus = "failed";
         }
-      } else {
-        console.error("[forgot-password] token insert failed:", insertError);
-        success = false;
-        message = DELIVERY_FAILURE_MESSAGE;
-        deliveryStatus = "failed";
       }
     }
 

@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { prisma } from "@/lib/db/prisma";
 
 // Daily cron — flips `order_attributions` rows from 'pending' to
 // 'approved' once `store_settings.commission_auto_approve_days` have
@@ -13,11 +13,6 @@ import { createClient } from "@supabase/supabase-js";
 // or manually:
 //   curl -X POST -H "Authorization: Bearer $CRON_SECRET" \
 //     https://madenkorea.com/api/cron/commission-approve
-
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
 
 function isAuthorized(req: NextRequest): boolean {
   const auth = req.headers.get("authorization") ?? "";
@@ -55,14 +50,15 @@ export async function GET(req: NextRequest) {
 async function runOnce() {
   // Pull current auto-approve window. 0 = approve immediately
   // (verify route handles it; cron has nothing to do this run).
-  const { data: settings, error: setErr } = await supabaseAdmin
-    .from("store_settings")
-    .select("commission_auto_approve_days")
-    .eq("id", 1)
-    .maybeSingle();
-  if (setErr) {
+  let settings: { commission_auto_approve_days: number } | null;
+  try {
+    settings = await prisma.store_settings.findFirst({
+      where: { id: 1 },
+      select: { commission_auto_approve_days: true },
+    });
+  } catch (e: any) {
     return NextResponse.json(
-      { ok: false, error: setErr.message },
+      { ok: false, error: e?.message || "settings_query_failed" },
       { status: 500 }
     );
   }
@@ -79,25 +75,32 @@ async function runOnce() {
   // still pending → approve. We compute the cutoff in JS so the SQL
   // stays portable and we can log the exact threshold.
   const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
-  const cutoffIso = new Date(cutoffMs).toISOString();
+  const cutoff = new Date(cutoffMs);
+  const cutoffIso = cutoff.toISOString();
 
   // Find pending attributions on orders paid before the cutoff.
   // Two-step (select then update) so we can return ids for the log
   // without relying on the SQL UPDATE … RETURNING shape.
-  const { data: pendingRows, error: pErr } = await supabaseAdmin
-    .from("order_attributions")
-    .select("order_id, orders!inner(paid_at, status)")
-    .eq("status", "pending")
-    .lte("orders.paid_at", cutoffIso)
-    .in("orders.status", ["paid", "processing", "shipped", "delivered"]);
-  if (pErr) {
+  let pendingRows: { order_id: string }[];
+  try {
+    pendingRows = await prisma.order_attributions.findMany({
+      where: {
+        status: "pending",
+        orders: {
+          paid_at: { lte: cutoff },
+          status: { in: ["paid", "processing", "shipped", "delivered"] },
+        },
+      },
+      select: { order_id: true },
+    });
+  } catch (e: any) {
     return NextResponse.json(
-      { ok: false, error: pErr.message },
+      { ok: false, error: e?.message || "pending_query_failed" },
       { status: 500 }
     );
   }
 
-  const orderIds = (pendingRows ?? []).map((r: any) => r.order_id);
+  const orderIds = (pendingRows ?? []).map((r) => r.order_id);
   if (orderIds.length === 0) {
     return NextResponse.json({
       ok: true,
@@ -108,28 +111,18 @@ async function runOnce() {
   }
 
   // Flip pending → approved for the matched set. Idempotent —
-  // already-approved rows aren't touched.
-  const { error: updErr } = await supabaseAdmin
-    .from("order_attributions")
-    .update({ status: "approved" })
-    .in("order_id", orderIds)
-    .eq("status", "pending");
-  if (updErr) {
+  // already-approved rows aren't touched. Writes MySQL directly, so the
+  // old Supabase→MySQL dual-write mirror is no longer needed.
+  try {
+    await prisma.order_attributions.updateMany({
+      where: { order_id: { in: orderIds }, status: "pending" },
+      data: { status: "approved" },
+    });
+  } catch (e: any) {
     return NextResponse.json(
-      { ok: false, error: updErr.message },
+      { ok: false, error: e?.message || "update_failed" },
       { status: 500 }
     );
-  }
-
-  // Dual-write: mirror each approved attribution into MySQL (the influencer
-  // withdraw balance reads approved attributions from MySQL). Best-effort.
-  try {
-    const { mirrorOrderAttributionIntoMysql } = await import("@/lib/data/attribution");
-    for (const oid of orderIds) {
-      await mirrorOrderAttributionIntoMysql(supabaseAdmin, oid);
-    }
-  } catch (e) {
-    console.error("[dual-write] cron commission-approve MySQL mirror failed:", e);
   }
 
   return NextResponse.json({

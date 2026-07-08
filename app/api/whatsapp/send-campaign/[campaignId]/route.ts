@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import supabaseAdmin from "@/lib/supabaseAdmin";
+import { prisma } from "@/lib/db/prisma";
 import {
   sendWhatsAppTemplate,
   MetaTemplateSendResult,
 } from "@/lib/whatsappMeta";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function POST(
   _req: NextRequest,
@@ -13,18 +16,14 @@ export async function POST(
   console.log("WA SEND-CAMPAIGN: start", campaignId);
 
   // 1) Load campaign with template_id
-  const { data: campaign, error: campErr } = await supabaseAdmin
-    .from("whatsapp_campaigns")
-    .select("id, name, template_id")
-    .eq("id", campaignId)
-    .single();
+  const campaign = await prisma.whatsapp_campaigns.findUnique({
+    where: { id: campaignId },
+    select: { id: true, name: true, template_id: true },
+  });
 
-  if (campErr || !campaign) {
-    console.error("WA SEND-CAMPAIGN: campaign not found", campErr);
-    return NextResponse.json(
-      { message: "Campaign not found" },
-      { status: 404 }
-    );
+  if (!campaign) {
+    console.error("WA SEND-CAMPAIGN: campaign not found");
+    return NextResponse.json({ message: "Campaign not found" }, { status: 404 });
   }
 
   if (!campaign.template_id) {
@@ -36,14 +35,13 @@ export async function POST(
   }
 
   // 2) Load template details
-  const { data: template, error: tplErr } = await supabaseAdmin
-    .from("whatsapp_templates")
-    .select("provider_template_name, language_code")
-    .eq("id", campaign.template_id)
-    .single();
+  const template = await prisma.whatsapp_templates.findUnique({
+    where: { id: campaign.template_id },
+    select: { provider_template_name: true, language_code: true },
+  });
 
-  if (tplErr || !template) {
-    console.error("WA SEND-CAMPAIGN: template not found", tplErr);
+  if (!template) {
+    console.error("WA SEND-CAMPAIGN: template not found");
     return NextResponse.json(
       { message: "Template not found for this campaign" },
       { status: 400 }
@@ -61,22 +59,20 @@ export async function POST(
   );
 
   // 3) Load queued messages
-  const { data: messages, error: msgErr } = await supabaseAdmin
-    .from("whatsapp_campaign_messages")
-    .select(
-      `
-      id,
-      to_phone,
-      status,
-      contact:whatsapp_contacts (
-        full_name
-      )
-    `
-    )
-    .eq("campaign_id", campaignId)
-    .eq("status", "queued");
-
-  if (msgErr) {
+  let messages: any[];
+  try {
+    messages = await prisma.whatsapp_campaign_messages.findMany({
+      where: { campaign_id: campaignId, status: "queued" },
+      select: {
+        id: true,
+        to_phone: true,
+        status: true,
+        whatsapp_contacts: {
+          select: { full_name: true },
+        },
+      },
+    });
+  } catch (msgErr) {
     console.error("WA SEND-CAMPAIGN: load messages error", msgErr);
     return NextResponse.json(
       { message: "Failed to load queued messages" },
@@ -97,10 +93,10 @@ export async function POST(
   let failedCount = 0;
 
   // 4) Loop through messages and send to Meta
-  for (const msg of messages as any[]) {
+  for (const msg of messages) {
     const msgId = msg.id as string;
     const toPhone = msg.to_phone as string;
-    const contactName = msg.contact?.full_name || "";
+    const contactName = msg.whatsapp_contacts?.full_name || "";
 
     // Decide body variables based on template
     let bodyVars: string[] = [];
@@ -129,24 +125,24 @@ export async function POST(
 
     if (result.success) {
       sentCount++;
-      await supabaseAdmin
-        .from("whatsapp_campaign_messages")
-        .update({
+      await prisma.whatsapp_campaign_messages.update({
+        where: { id: msgId },
+        data: {
           status: "sent",
           provider_message_id: result.providerMessageId,
-          sent_at: new Date().toISOString(),
+          sent_at: new Date(),
           error_message: null,
-        })
-        .eq("id", msgId);
+        },
+      });
     } else {
       failedCount++;
-      await supabaseAdmin
-        .from("whatsapp_campaign_messages")
-        .update({
+      await prisma.whatsapp_campaign_messages.update({
+        where: { id: msgId },
+        data: {
           status: "failed",
           error_message: result.error,
-        })
-        .eq("id", msgId);
+        },
+      });
     }
   }
 
