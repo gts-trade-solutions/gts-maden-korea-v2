@@ -1,7 +1,8 @@
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import { isSupportedCountry } from "@/lib/countries";
 import { requireAdmin } from "@/lib/auth/adminGuard";
 
@@ -16,15 +17,6 @@ import { requireAdmin } from "@/lib/auth/adminGuard";
 
 const json = (d: any, s = 200) =>
   NextResponse.json(d, { status: s, headers: { "cache-control": "no-store" } });
-
-
-function admin() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { persistSession: false, autoRefreshToken: false } }
-  );
-}
 
 // Whole-percent only; DB enforces these but we surface friendly
 // errors here before hitting the constraint.
@@ -50,18 +42,20 @@ export async function GET(
   const { error } = await requireAdmin();
   if (error) return error;
 
-  const sb = admin();
-  const { data, error: dbErr } = await sb
-    .from("influencer_profiles")
-    .select(
-      "user_id, handle, active, commission_cap_pct, default_user_discount_pct, applicable_countries"
-    )
-    .eq("user_id", params.user_id)
-    .maybeSingle();
-  if (dbErr) return json({ ok: false, error: dbErr.message }, 500);
+  const data = await prisma.influencer_profiles.findUnique({
+    where: { user_id: params.user_id },
+    select: {
+      user_id: true,
+      handle: true,
+      active: true,
+      commission_cap_pct: true,
+      default_user_discount_pct: true,
+      applicable_countries: true,
+    },
+  });
   if (!data) return json({ ok: false, error: "NOT_FOUND" }, 404);
 
-  return json({ ok: true, influencer: data });
+  return json({ ok: true, influencer: jsonSafe(data) });
 }
 
 export async function PATCH(
@@ -91,32 +85,26 @@ export async function PATCH(
   const updatePayload: Record<string, any> = {
     commission_cap_pct: v.cap,
     default_user_discount_pct: v.def,
-    updated_at: new Date().toISOString(),
+    updated_at: new Date(),
   };
   if (regions !== undefined) {
     updatePayload.applicable_countries = regions;
   }
 
-  const sb = admin();
-  const { data, error: upErr } = await sb
-    .from("influencer_profiles")
-    .update(updatePayload)
-    .eq("user_id", params.user_id)
-    .select(
-      "user_id, commission_cap_pct, default_user_discount_pct, applicable_countries"
-    )
-    .maybeSingle();
-  if (upErr) return json({ ok: false, error: upErr.message }, 500);
-  if (!data) return json({ ok: false, error: "NOT_FOUND" }, 404);
-
-  // Dual-write: mirror the influencer profile into MySQL (the influencer
-  // dashboard + commission caps read cap/discount/countries from MySQL).
   try {
-    const { mirrorInfluencerProfileIntoMysql } = await import("@/lib/data/influencer");
-    await mirrorInfluencerProfileIntoMysql(sb, params.user_id);
-  } catch (e) {
-    console.error("[dual-write] influencer settings MySQL mirror failed:", e);
+    const data = await prisma.influencer_profiles.update({
+      where: { user_id: params.user_id },
+      data: updatePayload,
+      select: {
+        user_id: true,
+        commission_cap_pct: true,
+        default_user_discount_pct: true,
+        applicable_countries: true,
+      },
+    });
+    return json({ ok: true, influencer: jsonSafe(data) });
+  } catch (e: any) {
+    if (e?.code === "P2025") return json({ ok: false, error: "NOT_FOUND" }, 404);
+    return json({ ok: false, error: e?.message || "UPDATE_FAILED" }, 500);
   }
-
-  return json({ ok: true, influencer: data });
 }

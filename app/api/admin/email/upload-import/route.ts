@@ -1,6 +1,8 @@
+import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
-import { createServiceClient } from "@/lib/supabaseServer";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import { requireAdmin } from "@/lib/auth/adminGuard";
 
 export const runtime = "nodejs";
@@ -28,8 +30,6 @@ function isValidEmail(email: string): boolean {
 export async function POST(req: NextRequest) {
   const { error } = await requireAdmin(req);
   if (error) return error;
-
-  const supabase = createServiceClient();
 
   const formData = await req.formData();
   const file = formData.get("file");
@@ -147,11 +147,12 @@ export async function POST(req: NextRequest) {
       slug: slugifyCategory(name),
     }));
 
-    const { data: existingCats, error: existingCatsErr } = await supabase
-      .from("email_category")
-      .select("id, slug");
-
-    if (existingCatsErr) {
+    let existingCats;
+    try {
+      existingCats = await prisma.email_category.findMany({
+        select: { id: true, slug: true },
+      });
+    } catch (existingCatsErr) {
       console.error(existingCatsErr);
       return NextResponse.json(
         { error: "Failed to fetch existing categories" },
@@ -161,7 +162,7 @@ export async function POST(req: NextRequest) {
 
     const existingMap = new Map<string, string>(); // slug -> id
     for (const c of existingCats || []) {
-      existingMap.set((c as any).slug, (c as any).id);
+      existingMap.set(c.slug as string, c.id as string);
     }
 
     const newCategories = categoriesToEnsure.filter(
@@ -169,18 +170,16 @@ export async function POST(req: NextRequest) {
     );
 
     if (newCategories.length > 0) {
-      const { data: insertedCats, error: insertCatsErr } = await supabase
-        .from("email_category")
-        .insert(
-          newCategories.map((c) => ({
-            slug: c.slug,
-            label: c.name,
-            description: null,
-          }))
-        )
-        .select("id, slug");
+      const toCreate = newCategories.map((c) => ({
+        id: randomUUID(),
+        slug: c.slug,
+        label: c.name,
+        description: null,
+      }));
 
-      if (insertCatsErr) {
+      try {
+        await prisma.email_category.createMany({ data: toCreate });
+      } catch (insertCatsErr) {
         console.error(insertCatsErr);
         return NextResponse.json(
           { error: "Failed to insert new categories" },
@@ -188,8 +187,8 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      for (const c of insertedCats || []) {
-        existingMap.set((c as any).slug, (c as any).id);
+      for (const c of toCreate) {
+        existingMap.set(c.slug, c.id);
       }
     }
 
@@ -209,13 +208,13 @@ export async function POST(req: NextRequest) {
   for (const row of validRows) {
     const email = row.email.trim();
 
-    const { data: existingContact, error: findErr } = await supabase
-      .from("email_contact")
-      .select("id")
-      .eq("email", email)
-      .maybeSingle();
-
-    if (findErr) {
+    let existingContact;
+    try {
+      existingContact = await prisma.email_contact.findFirst({
+        where: { email },
+        select: { id: true },
+      });
+    } catch (findErr) {
       console.error("Failed to search contact", email, findErr);
       continue;
     }
@@ -223,55 +222,60 @@ export async function POST(req: NextRequest) {
     let contactId = existingContact?.id as string | undefined;
 
     if (!contactId) {
-      const { data: inserted, error: insertContactErr } = await supabase
-        .from("email_contact")
-        .insert({
-          email,
-          name: row.name,
-          is_registered: false,
-          source: "import",
-        })
-        .select("id")
-        .single();
-
-      if (insertContactErr) {
+      const newId = randomUUID();
+      try {
+        await prisma.email_contact.create({
+          data: {
+            id: newId,
+            email,
+            name: row.name,
+            is_registered: false,
+            source: "import",
+          },
+        });
+      } catch (insertContactErr) {
         console.error("Failed to insert contact", email, insertContactErr);
         continue;
       }
 
       contactsCreated += 1;
-      contactId = inserted.id;
+      contactId = newId;
     }
 
     if (row.categoryName) {
       const catInfo = categoryMap.get(row.categoryName);
       if (catInfo) {
-        const { error: linkErr } = await supabase
-          .from("email_contact_category")
-          .insert({
-            contact_id: contactId,
-            category_id: catInfo.id,
+        try {
+          await prisma.email_contact_category.create({
+            data: {
+              contact_id: contactId,
+              category_id: catInfo.id,
+            },
           });
-
-        if (linkErr && !linkErr.message.includes("duplicate key")) {
-          console.error(
-            "Failed to link contact to category",
-            email,
-            row.categoryName,
-            linkErr
-          );
-        } else if (!linkErr) {
           linksCreated += 1;
+        } catch (linkErr: any) {
+          // P2002 = unique constraint (contact already linked to category).
+          // Mirror the old "duplicate key" ignore; log anything else.
+          if (linkErr?.code !== "P2002") {
+            console.error(
+              "Failed to link contact to category",
+              email,
+              row.categoryName,
+              linkErr
+            );
+          }
         }
       }
     }
   }
 
-  return NextResponse.json({
-    success: true,
-    totalRows,
-    contactsCreated,
-    categoriesCreated: categoryMap.size,
-    linksCreated,
-  });
+  return NextResponse.json(
+    jsonSafe({
+      success: true,
+      totalRows,
+      contactsCreated,
+      categoriesCreated: categoryMap.size,
+      linksCreated,
+    })
+  );
 }

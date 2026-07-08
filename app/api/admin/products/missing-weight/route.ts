@@ -1,7 +1,8 @@
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import { requireAdmin } from "@/lib/auth/adminGuard";
 
 // Admin-only audit list: published products without a usable
@@ -16,24 +17,20 @@ export async function GET() {
   const { error } = await requireAdmin();
   if (error) return error;
 
-  // Service role so RLS doesn't filter rows. We're only returning
-  // metadata (id, slug, name, brand) — no PII.
-  const sb = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { persistSession: false, autoRefreshToken: false } }
-  );
+  const data = await prisma.products.findMany({
+    where: {
+      is_published: true,
+      OR: [{ gross_weight_g: null }, { gross_weight_g: { lte: 0 } }],
+    },
+    orderBy: { name: "asc" },
+    select: {
+      id: true, slug: true, name: true,
+      net_weight_g: true, gross_weight_g: true,
+      brands: { select: { name: true } },
+    },
+  });
 
-  const { data, error: dbErr } = await sb
-    .from("products")
-    .select("id, slug, name, net_weight_g, gross_weight_g, brands(name)")
-    .eq("is_published", true)
-    .or("gross_weight_g.is.null,gross_weight_g.lte.0")
-    .order("name", { ascending: true });
-
-  if (dbErr) return json({ ok: false, error: dbErr.message }, 500);
-
-  const rows = (data ?? []).map((p: any) => ({
+  const rows = data.map((p) => ({
     id: p.id,
     slug: p.slug,
     name: p.name,
@@ -42,5 +39,5 @@ export async function GET() {
     gross_weight_g: p.gross_weight_g,
   }));
 
-  return json({ ok: true, total: rows.length, rows });
+  return json({ ok: true, total: rows.length, rows: jsonSafe(rows) });
 }

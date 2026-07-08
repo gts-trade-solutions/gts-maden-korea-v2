@@ -4,7 +4,8 @@
 // see all statuses. Admin only.
 
 import { NextResponse } from "next/server";
-import { createServiceClient } from "@/lib/supabaseServer";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import { requireAdmin } from "@/lib/auth/adminGuard";
 
 export const dynamic = "force-dynamic";
@@ -18,38 +19,49 @@ export async function GET(req: Request) {
 
   const url = new URL(req.url);
   const status = (url.searchParams.get("status") ?? "pending").toLowerCase();
-  const sb = createServiceClient();
 
-  let q = sb
-    .from("email_change_requests")
-    .select(
-      "id, user_id, current_email, requested_email, status, reason, admin_note, requested_at, processed_at"
-    )
-    .order("requested_at", { ascending: false })
-    .limit(200);
-  if (status !== "all") q = q.eq("status", status);
-
-  const { data, error: qErr } = await q;
-  if (qErr) return json({ ok: false, error: qErr.message }, 500);
+  let data;
+  try {
+    data = await prisma.email_change_requests.findMany({
+      where: status !== "all" ? { status } : undefined,
+      select: {
+        id: true,
+        user_id: true,
+        current_email: true,
+        requested_email: true,
+        status: true,
+        reason: true,
+        admin_note: true,
+        requested_at: true,
+        processed_at: true,
+      },
+      orderBy: { requested_at: "desc" },
+      take: 200,
+    });
+  } catch (e: any) {
+    return json({ ok: false, error: e?.message ?? "query_failed" }, 500);
+  }
 
   // Decorate with the requester's name for the admin UI.
-  const ids = Array.from(new Set((data ?? []).map((r) => r.user_id as string)));
+  const ids = Array.from(new Set(data.map((r) => r.user_id as string)));
   const nameMap = new Map<string, string | null>();
   if (ids.length > 0) {
-    const { data: profs } = await sb
-      .from("profiles")
-      .select("id, full_name")
-      .in("id", ids);
-    for (const p of profs ?? []) {
+    const profs = await prisma.profiles.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, full_name: true },
+    });
+    for (const p of profs) {
       nameMap.set(p.id as string, (p.full_name as string | null) ?? null);
     }
   }
 
-  return json({
-    ok: true,
-    rows: (data ?? []).map((r) => ({
-      ...r,
-      requester_name: nameMap.get(r.user_id as string) ?? null,
-    })),
-  });
+  return json(
+    jsonSafe({
+      ok: true,
+      rows: data.map((r) => ({
+        ...r,
+        requester_name: nameMap.get(r.user_id as string) ?? null,
+      })),
+    })
+  );
 }

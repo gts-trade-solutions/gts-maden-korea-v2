@@ -1,7 +1,8 @@
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import { createAdminClient } from "@/lib/supabaseAdmin";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import { requireAdmin } from "@/lib/auth/adminGuard";
 
 const json = (d: any, s = 200) =>
@@ -22,48 +23,10 @@ export async function GET(req: Request) {
   const range = url.searchParams.get("range") || "7d";
   const interval = RANGES[range] || RANGES["7d"];
 
-  const admin = createAdminClient();
-
-  // Per-session funnel: max() per session_id over the time window.
-  const sql = `
-    with windowed as (
-      select session_id, event_name
-      from public.events
-      where occurred_at > now() - interval '${interval}'
-    ),
-    per_session as (
-      select session_id,
-        max(case when event_name = 'page_view'             then 1 else 0 end) as visited,
-        max(case when event_name = 'product_view'          then 1 else 0 end) as viewed_product,
-        max(case when event_name = 'add_to_cart'           then 1 else 0 end) as added_to_cart,
-        max(case when event_name = 'checkout_started'      then 1 else 0 end) as started_checkout,
-        max(case when event_name = 'pay_clicked'           then 1 else 0 end) as clicked_pay,
-        max(case when event_name = 'payment_modal_opened'  then 1 else 0 end) as opened_modal,
-        max(case when event_name = 'order_placed'          then 1 else 0 end) as purchased
-      from windowed
-      group by session_id
-    )
-    select
-      count(*)                          as total_sessions,
-      coalesce(sum(visited),0)          as visited,
-      coalesce(sum(viewed_product),0)   as viewed_product,
-      coalesce(sum(added_to_cart),0)    as added_to_cart,
-      coalesce(sum(started_checkout),0) as started_checkout,
-      coalesce(sum(clicked_pay),0)      as clicked_pay,
-      coalesce(sum(opened_modal),0)     as opened_modal,
-      coalesce(sum(purchased),0)        as purchased
-    from per_session;
-  `;
-
-  const { data, error: rpcErr } = await admin.rpc("exec_sql_admin", { p_sql: sql }).single();
-
-  // Fall back to executing via a one-off pgsql RPC isn't available here,
-  // so use the events table directly via PostgREST aggregate. Simpler:
-  // count per event_name, then derive per-session totals client-side
-  // for stages we care about. Since there's no built-in for the
-  // session-pivot, we run two queries: one for event totals, one for
-  // distinct sessions.
-  if (rpcErr) {
+  try {
+    // Per-session funnel. There's no server-side session-pivot available here,
+    // so we pull all events in the window and derive the per-session stage
+    // flags in JS. Admin-only, so the cost is fine.
     const cutoff = new Date(
       Date.now() -
         ({ "1 day": 1, "7 days": 7, "30 days": 30, "90 days": 90 }[interval] ?? 7) *
@@ -71,17 +34,15 @@ export async function GET(req: Request) {
           60 *
           60 *
           1000
-    ).toISOString();
+    );
 
-    // Pull all events in window — admin-only, so the cost is fine.
-    const { data: rows, error: e2 } = await admin
-      .from("events")
-      .select("session_id, event_name")
-      .gte("occurred_at", cutoff);
-    if (e2) return json({ ok: false, error: e2.message }, 500);
+    const rows = await prisma.events.findMany({
+      where: { occurred_at: { gte: cutoff } },
+      select: { session_id: true, event_name: true },
+    });
 
     const seen: Record<string, Set<string>> = {};
-    for (const r of rows || []) {
+    for (const r of rows) {
       const set = seen[r.session_id] || (seen[r.session_id] = new Set());
       set.add(r.event_name);
     }
@@ -109,36 +70,23 @@ export async function GET(req: Request) {
       }
     );
 
-    return json({
-      ok: true,
-      range,
-      stages: [
-        { key: "visited", label: "Visited site", count: totals.visited },
-        { key: "viewed_product", label: "Viewed a product", count: totals.viewed_product },
-        { key: "added_to_cart", label: "Added to cart", count: totals.added_to_cart },
-        { key: "started_checkout", label: "Started checkout", count: totals.started_checkout },
-        { key: "clicked_pay", label: "Clicked Pay", count: totals.clicked_pay },
-        { key: "opened_modal", label: "Opened Razorpay", count: totals.opened_modal },
-        { key: "purchased", label: "Purchased", count: totals.purchased },
-      ],
-      total_sessions: totals.total,
-    });
+    return json(
+      jsonSafe({
+        ok: true,
+        range,
+        stages: [
+          { key: "visited", label: "Visited site", count: totals.visited },
+          { key: "viewed_product", label: "Viewed a product", count: totals.viewed_product },
+          { key: "added_to_cart", label: "Added to cart", count: totals.added_to_cart },
+          { key: "started_checkout", label: "Started checkout", count: totals.started_checkout },
+          { key: "clicked_pay", label: "Clicked Pay", count: totals.clicked_pay },
+          { key: "opened_modal", label: "Opened Razorpay", count: totals.opened_modal },
+          { key: "purchased", label: "Purchased", count: totals.purchased },
+        ],
+        total_sessions: totals.total,
+      })
+    );
+  } catch (e: any) {
+    return json({ ok: false, error: e?.message || "READ_FAILED" }, 500);
   }
-
-  // If exec_sql_admin existed, use the result. (Kept for forward-compat.)
-  const r = data as any;
-  return json({
-    ok: true,
-    range,
-    stages: [
-      { key: "visited", label: "Visited site", count: Number(r.visited) },
-      { key: "viewed_product", label: "Viewed a product", count: Number(r.viewed_product) },
-      { key: "added_to_cart", label: "Added to cart", count: Number(r.added_to_cart) },
-      { key: "started_checkout", label: "Started checkout", count: Number(r.started_checkout) },
-      { key: "clicked_pay", label: "Clicked Pay", count: Number(r.clicked_pay) },
-      { key: "opened_modal", label: "Opened Razorpay", count: Number(r.opened_modal) },
-      { key: "purchased", label: "Purchased", count: Number(r.purchased) },
-    ],
-    total_sessions: Number(r.total_sessions),
-  });
 }

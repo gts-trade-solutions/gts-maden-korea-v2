@@ -2,16 +2,11 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import { requireAdmin } from "@/lib/auth/adminGuard";
 
-// Admin-only service-role READ endpoint for the WhatsApp marketing pages.
-//
-// These admin pages used to read whatsapp_* tables directly with the browser
-// anon Supabase client. That only worked because RLS was OFF on those tables.
-// To let us enable RLS (closing the anon-read leak) WITHOUT breaking the UI,
-// every read is moved here behind requireAdmin + the service-role client.
-// Writes already go through adminWrite (/api/admin/catalog/write) — untouched.
+// Admin-only READ endpoint for the WhatsApp marketing pages (MySQL/Prisma).
 //
 // One route, dispatched by ?resource=... so each page's exact
 // select/filter/order is replicated and the UI is unchanged:
@@ -24,111 +19,117 @@ import { requireAdmin } from "@/lib/auth/adminGuard";
 const json = (d: any, s = 200) =>
   NextResponse.json(d, { status: s, headers: { "cache-control": "no-store" } });
 
-function admin() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { persistSession: false, autoRefreshToken: false } }
-  );
-}
-
 export async function GET(req: Request) {
   const { error } = await requireAdmin(req);
   if (error) return error;
 
   const url = new URL(req.url);
   const resource = url.searchParams.get("resource") || "";
-  const sb = admin();
 
   try {
     if (resource === "stats") {
       // Dashboard: aggregate counts + 5 most recent campaigns.
       const [
-        contactsRes,
-        templatesRes,
-        campaignsCountRes,
-        runningCampaignsRes,
-        recentCampaignsRes,
+        totalContacts,
+        activeTemplates,
+        totalCampaigns,
+        runningCampaigns,
+        recentCampaigns,
       ] = await Promise.all([
-        sb.from("whatsapp_contacts").select("id", { count: "exact", head: true }),
-        sb
-          .from("whatsapp_templates")
-          .select("id", { count: "exact", head: true })
-          .eq("is_active", true),
-        sb.from("whatsapp_campaigns").select("id", { count: "exact", head: true }),
-        sb
-          .from("whatsapp_campaigns")
-          .select("id", { count: "exact", head: true })
-          .eq("status", "running"),
-        sb
-          .from("whatsapp_campaigns")
-          .select("id, name, status, total_target_count, created_at")
-          .order("created_at", { ascending: false })
-          .limit(5),
+        prisma.whatsapp_contacts.count(),
+        prisma.whatsapp_templates.count({ where: { is_active: true } }),
+        prisma.whatsapp_campaigns.count(),
+        prisma.whatsapp_campaigns.count({ where: { status: "running" } }),
+        prisma.whatsapp_campaigns.findMany({
+          select: {
+            id: true,
+            name: true,
+            status: true,
+            total_target_count: true,
+            created_at: true,
+          },
+          orderBy: { created_at: "desc" },
+          take: 5,
+        }),
       ]);
-
-      if (recentCampaignsRes.error)
-        return json({ ok: false, error: recentCampaignsRes.error.message }, 500);
 
       return json({
         ok: true,
         stats: {
-          totalContacts: contactsRes.count ?? 0,
-          activeTemplates: templatesRes.count ?? 0,
-          totalCampaigns: campaignsCountRes.count ?? 0,
-          runningCampaigns: runningCampaignsRes.count ?? 0,
+          totalContacts: totalContacts ?? 0,
+          activeTemplates: activeTemplates ?? 0,
+          totalCampaigns: totalCampaigns ?? 0,
+          runningCampaigns: runningCampaigns ?? 0,
         },
-        recentCampaigns: recentCampaignsRes.data ?? [],
+        recentCampaigns: jsonSafe(recentCampaigns ?? []),
       });
     }
 
     if (resource === "contacts") {
       // Full contacts list (contacts page).
-      const { data, error: e } = await sb
-        .from("whatsapp_contacts")
-        .select("*")
-        .order("created_at", { ascending: false });
-      if (e) return json({ ok: false, error: e.message }, 500);
-      return json({ ok: true, contacts: data ?? [] });
+      const data = await prisma.whatsapp_contacts.findMany({
+        orderBy: { created_at: "desc" },
+      });
+      return json({ ok: true, contacts: jsonSafe(data ?? []) });
     }
 
     if (resource === "templates") {
       // Templates list. activeOnly=1 mirrors the campaigns/new page read.
       const activeOnly = url.searchParams.get("activeOnly") === "1";
-      const select = activeOnly
-        ? "id, name, provider_template_name, category, language_code, body_preview"
-        : "id, name, provider_template_name, category, language_code, body_preview, is_active, created_at";
-      let q = sb.from("whatsapp_templates").select(select);
-      if (activeOnly) q = q.eq("is_active", true);
-      q = q.order("created_at", { ascending: false });
-      const { data, error: e } = await q;
-      if (e) return json({ ok: false, error: e.message }, 500);
-      return json({ ok: true, templates: data ?? [] });
+      const data = await prisma.whatsapp_templates.findMany({
+        where: activeOnly ? { is_active: true } : undefined,
+        select: activeOnly
+          ? {
+              id: true,
+              name: true,
+              provider_template_name: true,
+              category: true,
+              language_code: true,
+              body_preview: true,
+            }
+          : {
+              id: true,
+              name: true,
+              provider_template_name: true,
+              category: true,
+              language_code: true,
+              body_preview: true,
+              is_active: true,
+              created_at: true,
+            },
+        orderBy: { created_at: "desc" },
+      });
+      return json({ ok: true, templates: jsonSafe(data ?? []) });
     }
 
     if (resource === "tags") {
       // Distinct tags across all contacts (campaigns/new audience picker).
-      const { data, error: e } = await sb
-        .from("whatsapp_contacts")
-        .select("tags");
-      if (e) return json({ ok: false, error: e.message }, 500);
+      const data = await prisma.whatsapp_contacts.findMany({
+        select: { tags: true },
+      });
       const set = new Set<string>();
       (data || []).forEach((c: any) => {
-        (c.tags || []).forEach((t: string) => set.add(t));
+        ((c.tags as any[]) || []).forEach((t: string) => set.add(t));
       });
       return json({ ok: true, tags: Array.from(set).sort() });
     }
 
     if (resource === "campaigns") {
       // Campaigns list page.
-      const { data, error: e } = await sb
-        .from("whatsapp_campaigns")
-        .select(
-          "id, name, status, scheduled_at, started_at, completed_at, total_target_count, created_at"
-        )
-        .order("created_at", { ascending: false });
-      if (e) return json({ ok: false, error: e.message }, 500);
-      return json({ ok: true, campaigns: data ?? [] });
+      const data = await prisma.whatsapp_campaigns.findMany({
+        select: {
+          id: true,
+          name: true,
+          status: true,
+          scheduled_at: true,
+          started_at: true,
+          completed_at: true,
+          total_target_count: true,
+          created_at: true,
+        },
+        orderBy: { created_at: "desc" },
+      });
+      return json({ ok: true, campaigns: jsonSafe(data ?? []) });
     }
 
     if (resource === "campaign") {
@@ -136,52 +137,56 @@ export async function GET(req: Request) {
       const id = url.searchParams.get("id") || "";
       if (!id) return json({ ok: false, error: "MISSING_ID" }, 400);
 
-      const { data: campaign, error: campErr } = await sb
-        .from("whatsapp_campaigns")
-        .select(
-          "id, name, status, template_id, scheduled_at, started_at, completed_at, total_target_count, created_at"
-        )
-        .eq("id", id)
-        .single();
-      if (campErr || !campaign)
-        return json({ ok: false, error: campErr?.message || "NOT_FOUND" }, 404);
+      const campaign = await prisma.whatsapp_campaigns.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          name: true,
+          status: true,
+          template_id: true,
+          scheduled_at: true,
+          started_at: true,
+          completed_at: true,
+          total_target_count: true,
+          created_at: true,
+        },
+      });
+      if (!campaign) return json({ ok: false, error: "NOT_FOUND" }, 404);
 
       let template: any = null;
       if (campaign.template_id) {
-        const { data: tpl } = await sb
-          .from("whatsapp_templates")
-          .select("id, name, provider_template_name, language_code")
-          .eq("id", campaign.template_id)
-          .single();
+        const tpl = await prisma.whatsapp_templates.findUnique({
+          where: { id: campaign.template_id },
+          select: {
+            id: true,
+            name: true,
+            provider_template_name: true,
+            language_code: true,
+          },
+        });
         if (tpl) template = tpl;
       }
 
-      const [queuedRes, sentRes, failedRes] = await Promise.all([
-        sb
-          .from("whatsapp_campaign_messages")
-          .select("id", { count: "exact", head: true })
-          .eq("campaign_id", id)
-          .eq("status", "queued"),
-        sb
-          .from("whatsapp_campaign_messages")
-          .select("id", { count: "exact", head: true })
-          .eq("campaign_id", id)
-          .eq("status", "sent"),
-        sb
-          .from("whatsapp_campaign_messages")
-          .select("id", { count: "exact", head: true })
-          .eq("campaign_id", id)
-          .eq("status", "failed"),
+      const [queued, sent, failed] = await Promise.all([
+        prisma.whatsapp_campaign_messages.count({
+          where: { campaign_id: id, status: "queued" },
+        }),
+        prisma.whatsapp_campaign_messages.count({
+          where: { campaign_id: id, status: "sent" },
+        }),
+        prisma.whatsapp_campaign_messages.count({
+          where: { campaign_id: id, status: "failed" },
+        }),
       ]);
 
       return json({
         ok: true,
-        campaign,
-        template,
+        campaign: jsonSafe(campaign),
+        template: jsonSafe(template),
         stats: {
-          queued: queuedRes.count || 0,
-          sent: sentRes.count || 0,
-          failed: failedRes.count || 0,
+          queued: queued || 0,
+          sent: sent || 0,
+          failed: failed || 0,
         },
       });
     }
@@ -196,11 +201,16 @@ export async function GET(req: Request) {
         .map((t) => t.trim())
         .filter(Boolean);
 
-      let q = sb.from("whatsapp_contacts").select("id, phone_e164");
-      if (tags.length > 0) q = q.overlaps("tags", tags);
-      const { data, error: e } = await q;
-      if (e) return json({ ok: false, error: e.message }, 500);
-      return json({ ok: true, contacts: data ?? [] });
+      const data =
+        tags.length > 0
+          ? await prisma.whatsapp_contacts.findMany({
+              where: { OR: tags.map((t) => ({ tags: { array_contains: t } })) },
+              select: { id: true, phone_e164: true },
+            })
+          : await prisma.whatsapp_contacts.findMany({
+              select: { id: true, phone_e164: true },
+            });
+      return json({ ok: true, contacts: jsonSafe(data ?? []) });
     }
 
     return json({ ok: false, error: "BAD_RESOURCE" }, 400);

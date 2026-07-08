@@ -1,7 +1,8 @@
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import { createAdminClient } from "@/lib/supabaseAdmin";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import {
   bustBusinessInfoCache,
   listCountryContacts,
@@ -22,7 +23,7 @@ export async function GET() {
   const { error } = await requireAdmin();
   if (error) return error;
   const rows = await listCountryContacts();
-  return json({ ok: true, rows });
+  return json(jsonSafe({ ok: true, rows }));
 }
 
 /**
@@ -38,7 +39,6 @@ export async function GET() {
 export async function PUT(req: Request) {
   const { user, error } = await requireAdmin(req);
   if (error) return error;
-  const supabase = createAdminClient();
 
   const body = await req.json().catch(() => ({}));
   const rows: any[] = Array.isArray(body?.rows) ? body.rows : [];
@@ -68,27 +68,28 @@ export async function PUT(req: Request) {
 
   // Single transaction: delete codes not in payload, upsert the rest.
   const codes = cleaned.map((r) => r.country_code);
-  if (codes.length === 0) {
-    // Caller submitted an empty list — wipe everything.
-    const { error: delErr } = await supabase
-      .from("country_contacts")
-      .delete()
-      .gte("country_code", "");
-    if (delErr) return json({ ok: false, error: delErr.message }, 500);
-  } else {
-    const { error: delErr } = await supabase
-      .from("country_contacts")
-      .delete()
-      .not("country_code", "in", `(${codes.map((c) => `"${c}"`).join(",")})`);
-    if (delErr) return json({ ok: false, error: delErr.message }, 500);
-
-    const { error: upErr } = await supabase
-      .from("country_contacts")
-      .upsert(cleaned, { onConflict: "country_code" });
-    if (upErr) return json({ ok: false, error: upErr.message }, 500);
+  try {
+    if (codes.length === 0) {
+      // Caller submitted an empty list — wipe everything.
+      await prisma.country_contacts.deleteMany({});
+    } else {
+      await prisma.country_contacts.deleteMany({
+        where: { country_code: { notIn: codes } },
+      });
+      for (const row of cleaned) {
+        const { country_code, ...rest } = row;
+        await prisma.country_contacts.upsert({
+          where: { country_code },
+          update: rest,
+          create: { country_code, ...rest },
+        });
+      }
+    }
+  } catch (upErr: any) {
+    return json({ ok: false, error: upErr?.message ?? "Update failed" }, 500);
   }
 
   bustBusinessInfoCache();
   const fresh = await listCountryContacts();
-  return json({ ok: true, rows: fresh });
+  return json(jsonSafe({ ok: true, rows: fresh }));
 }

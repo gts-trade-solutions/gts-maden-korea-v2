@@ -1,5 +1,7 @@
+import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { createServiceClient } from "@/lib/supabaseServer";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import { requireAdmin } from "@/lib/auth/adminGuard";
 
 export const runtime = "nodejs";
@@ -18,7 +20,6 @@ export async function POST(req: NextRequest) {
   const { error: authErr } = await requireAdmin(req);
   if (authErr) return authErr;
 
-  const supabase = createServiceClient();
   const { email, unsubscribed }: Body = await req.json();
 
   if (!email) {
@@ -31,17 +32,13 @@ export async function POST(req: NextRequest) {
   const emailLower = email.trim().toLowerCase();
 
   if (unsubscribed) {
-    const { error } = await supabase
-      .from("email_unsubscribe")
-      .upsert(
-        {
-          email: emailLower,
-          source: "admin",
-        },
-        { onConflict: "email" }
-      );
-
-    if (error) {
+    try {
+      await prisma.email_unsubscribe.upsert({
+        where: { email: emailLower },
+        update: { source: "admin" },
+        create: { id: randomUUID(), email: emailLower, source: "admin" },
+      });
+    } catch (error) {
       console.error(error);
       return NextResponse.json(
         { error: "Failed to unsubscribe email" },
@@ -49,12 +46,11 @@ export async function POST(req: NextRequest) {
       );
     }
   } else {
-    const { error } = await supabase
-      .from("email_unsubscribe")
-      .delete()
-      .eq("email", emailLower);
-
-    if (error) {
+    try {
+      await prisma.email_unsubscribe.deleteMany({
+        where: { email: emailLower },
+      });
+    } catch (error) {
       console.error(error);
       return NextResponse.json(
         { error: "Failed to resubscribe email" },
@@ -63,5 +59,5 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ success: true });
+  return NextResponse.json(jsonSafe({ success: true }));
 }

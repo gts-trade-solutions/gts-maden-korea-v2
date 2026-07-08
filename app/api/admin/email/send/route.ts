@@ -1,6 +1,8 @@
 // app/api/admin/email/send/route.ts
+import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { createServiceClient } from "@/lib/supabaseServer";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import { sendEmail } from "@/lib/ses";
 import { requireAdmin } from "@/lib/auth/adminGuard";
 
@@ -50,7 +52,6 @@ export async function POST(req: NextRequest) {
   const { error } = await requireAdmin(req);
   if (error) return error;
 
-  const supabase = createServiceClient();
   const body: Body = await req.json();
 
   const {
@@ -70,26 +71,24 @@ export async function POST(req: NextRequest) {
   }
 
   // 1) Create campaign
-  const { data: campaign, error: campErr } = await supabase
-    .from("email_campaign")
-    .insert({
-      subject,
-      body_html: bodyHtml,
-      target_type: targetType,
-      status: "queued",
-    })
-    .select("*")
-    .single();
-
-  if (campErr || !campaign) {
+  const campaignId = randomUUID();
+  try {
+    await prisma.email_campaign.create({
+      data: {
+        id: campaignId,
+        subject,
+        body_html: bodyHtml,
+        target_type: targetType,
+        status: "queued",
+      },
+    });
+  } catch (campErr) {
     console.error(campErr);
     return NextResponse.json(
       { error: "Failed to create campaign" },
       { status: 500 }
     );
   }
-
-  const campaignId = campaign.id as string;
 
   // 2) Build recipients list (before unsubscribe filtering)
   let recipients: {
@@ -114,11 +113,9 @@ export async function POST(req: NextRequest) {
       category_id: catId,
     }));
 
-    const { error: campCatErr } = await supabase
-      .from("email_campaign_category")
-      .insert(rows);
-
-    if (campCatErr) {
+    try {
+      await prisma.email_campaign_category.createMany({ data: rows });
+    } catch (campCatErr) {
       console.error(campCatErr);
       return NextResponse.json(
         { error: "Failed to link categories to campaign" },
@@ -127,12 +124,17 @@ export async function POST(req: NextRequest) {
     }
 
     // Fetch contacts for selected categories
-    const { data: contactCats, error: ccErr } = await supabase
-      .from("email_contact_category")
-      .select("contact:email_contact (id, email, name, is_registered)")
-      .in("category_id", categoryIds);
-
-    if (ccErr) {
+    let contactCats;
+    try {
+      contactCats = await prisma.email_contact_category.findMany({
+        where: { category_id: { in: categoryIds } },
+        select: {
+          email_contact: {
+            select: { id: true, email: true, name: true, is_registered: true },
+          },
+        },
+      });
+    } catch (ccErr) {
       console.error(ccErr);
       return NextResponse.json(
         { error: "Failed to fetch contacts for categories" },
@@ -143,7 +145,7 @@ export async function POST(req: NextRequest) {
     const seen = new Set<string>();
 
     for (const row of contactCats || []) {
-      const c = (row as any).contact;
+      const c = (row as any).email_contact;
       if (!c || !c.id || !c.email) continue;
       if (seen.has(c.id)) continue;
       seen.add(c.id);
@@ -156,32 +158,20 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // ---------- REGISTERED USERS (Supabase Auth) ----------
+    // ---------- REGISTERED USERS (auth users) ----------
   } else if (targetType === "registered_users") {
-    // Fetch all auth users from Supabase
-    let page = 1;
-    const perPage = 1000;
-    const allUsers: any[] = [];
-
-    while (true) {
-      const { data, error } = await (supabase as any).auth.admin.listUsers({
-        page,
-        perPage,
+    let allUsers;
+    try {
+      allUsers = await prisma.user.findMany({
+        where: { email: { not: null } },
+        select: { id: true, email: true, name: true },
       });
-
-      if (error) {
-        console.error("Error listing auth users:", error);
-        return NextResponse.json(
-          { error: "Failed to fetch registered users from auth" },
-          { status: 500 }
-        );
-      }
-
-      const users = data?.users || [];
-      allUsers.push(...users);
-
-      if (users.length < perPage) break;
-      page += 1;
+    } catch (err) {
+      console.error("Error listing auth users:", err);
+      return NextResponse.json(
+        { error: "Failed to fetch registered users from auth" },
+        { status: 500 }
+      );
     }
 
     const selectedSet =
@@ -189,20 +179,30 @@ export async function POST(req: NextRequest) {
         ? new Set(selectedEmails.map((e) => e.toLowerCase()))
         : null;
 
-    for (const u of allUsers) {
+    const chosen = allUsers.filter((u) => {
       const email = (u.email as string | null)?.trim();
-      if (!email) continue;
+      if (!email) return false;
+      // Admin did not select this user
+      if (selectedSet && !selectedSet.has(email.toLowerCase())) return false;
+      return true;
+    });
 
-      const emailLower = email.toLowerCase();
-      if (selectedSet && !selectedSet.has(emailLower)) {
-        // Admin did not select this user
-        continue;
-      }
+    // Prefer the canonical profile name (profiles.full_name); fall back to the
+    // NextAuth auth-user name.
+    const ids = chosen.map((u) => u.id);
+    const profs =
+      ids.length > 0
+        ? await prisma.profiles.findMany({
+            where: { id: { in: ids } },
+            select: { id: true, full_name: true },
+          })
+        : [];
+    const nameMap = new Map<string, string | null>();
+    for (const p of profs) nameMap.set(p.id, p.full_name ?? null);
 
-      const name =
-        (u.user_metadata && u.user_metadata.full_name) ||
-        (u.user_metadata && u.user_metadata.name) ||
-        null;
+    for (const u of chosen) {
+      const email = (u.email as string).trim();
+      const name = nameMap.get(u.id) ?? u.name ?? null;
 
       recipients.push({
         contact_id: null, // not tied to email_contact
@@ -254,12 +254,13 @@ export async function POST(req: NextRequest) {
     )
   );
 
-  const { data: unsubRows, error: unsubErr } = await supabase
-    .from("email_unsubscribe")
-    .select("email")
-    .in("email", emailsLower);
-
-  if (unsubErr) {
+  let unsubRows;
+  try {
+    unsubRows = await prisma.email_unsubscribe.findMany({
+      where: { email: { in: emailsLower } },
+      select: { email: true },
+    });
+  } catch (unsubErr) {
     console.error(unsubErr);
     return NextResponse.json(
       { error: "Failed to check unsubscribe list" },
@@ -268,7 +269,7 @@ export async function POST(req: NextRequest) {
   }
 
   const unsubSet = new Set(
-    (unsubRows || []).map((r: any) => r.email.toLowerCase())
+    (unsubRows || []).map((r) => r.email.toLowerCase())
   );
 
   recipients = recipients.filter(
@@ -284,6 +285,7 @@ export async function POST(req: NextRequest) {
 
   // 4) Insert recipients
   const recipientsToInsert = recipients.map((r) => ({
+    id: randomUUID(),
     campaign_id: campaignId,
     contact_id: r.contact_id,
     email: r.email,
@@ -292,11 +294,11 @@ export async function POST(req: NextRequest) {
     status: "pending",
   }));
 
-  const { error: recErr } = await supabase
-    .from("email_campaign_recipient")
-    .insert(recipientsToInsert);
-
-  if (recErr) {
+  try {
+    await prisma.email_campaign_recipient.createMany({
+      data: recipientsToInsert,
+    });
+  } catch (recErr) {
     console.error(recErr);
     return NextResponse.json(
       { error: "Failed to insert campaign recipients" },
@@ -305,22 +307,22 @@ export async function POST(req: NextRequest) {
   }
 
   // 5) Mark campaign as sending
-  await supabase
-    .from("email_campaign")
-    .update({
+  await prisma.email_campaign.update({
+    where: { id: campaignId },
+    data: {
       status: "sending",
-      send_started_at: new Date().toISOString(),
-    })
-    .eq("id", campaignId);
+      send_started_at: new Date(),
+    },
+  });
 
   // 6) Send emails and store SES messageId
-  const { data: recsToSend, error: fetchRecErr } = await supabase
-    .from("email_campaign_recipient")
-    .select("id, email, name")
-    .eq("campaign_id", campaignId)
-    .eq("status", "pending");
-
-  if (fetchRecErr) {
+  let recsToSend;
+  try {
+    recsToSend = await prisma.email_campaign_recipient.findMany({
+      where: { campaign_id: campaignId, status: "pending" },
+      select: { id: true, email: true, name: true },
+    });
+  } catch (fetchRecErr) {
     console.error(fetchRecErr);
     return NextResponse.json(
       { error: "Failed to fetch recipients to send" },
@@ -342,40 +344,42 @@ export async function POST(req: NextRequest) {
         html: finalHtml,
       });
 
-      await supabase
-        .from("email_campaign_recipient")
-        .update({
+      await prisma.email_campaign_recipient.update({
+        where: { id: rec.id },
+        data: {
           status: "sent",
-          sent_at: new Date().toISOString(),
+          sent_at: new Date(),
           error: null,
           ses_message_id: messageId || null,
-        })
-        .eq("id", rec.id);
+        },
+      });
     } catch (err: any) {
       console.error("Failed to send to", rec.email, err);
 
-      await supabase
-        .from("email_campaign_recipient")
-        .update({
+      await prisma.email_campaign_recipient.update({
+        where: { id: rec.id },
+        data: {
           status: "failed",
           error: err?.message ?? "Unknown error",
-        })
-        .eq("id", rec.id);
+        },
+      });
     }
   }
 
   // 7) Mark campaign completed
-  await supabase
-    .from("email_campaign")
-    .update({
+  await prisma.email_campaign.update({
+    where: { id: campaignId },
+    data: {
       status: "completed",
-      send_completed_at: new Date().toISOString(),
-    })
-    .eq("id", campaignId);
-
-  return NextResponse.json({
-    success: true,
-    campaignId,
-    recipientsCount: recipients.length,
+      send_completed_at: new Date(),
+    },
   });
+
+  return NextResponse.json(
+    jsonSafe({
+      success: true,
+      campaignId,
+      recipientsCount: recipients.length,
+    })
+  );
 }

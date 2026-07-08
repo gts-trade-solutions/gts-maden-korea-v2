@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { prisma } from "@/lib/db/prisma";
 import { sendEmail } from "@/lib/ses";
 import { getEmailTranslator } from "@/lib/i18n/email";
 import { requireAdmin } from "@/lib/auth/adminGuard";
@@ -18,14 +18,6 @@ import { requireAdmin } from "@/lib/auth/adminGuard";
 const json = (d: any, s = 200) =>
   NextResponse.json(d, { status: s, headers: { "cache-control": "no-store" } });
 
-
-function admin() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { persistSession: false, autoRefreshToken: false } }
-  );
-}
 
 function siteUrl() {
   // Production canonical URL — used in CTA link. Falls back to the
@@ -50,48 +42,45 @@ export async function POST(req: Request) {
     return json({ ok: false, error: "INVALID_DECISION" }, 400);
   }
 
-  const sb = admin();
-
   // 1) Fetch the request row so we know whose decision this is.
-  const { data: request, error: reqErr } = await sb
-    .from("influencer_requests")
-    .select("id, user_id, handle, status")
-    .eq("id", requestId)
-    .maybeSingle();
-  if (reqErr) return json({ ok: false, error: reqErr.message }, 500);
+  const request = await prisma.influencer_requests.findUnique({
+    where: { id: requestId },
+    select: { id: true, user_id: true, handle: true, status: true },
+  });
   if (!request) return json({ ok: false, error: "REQUEST_NOT_FOUND" }, 404);
 
-  const userId = (request as any).user_id as string;
+  const userId = request.user_id as string;
   if (!userId) return json({ ok: false, error: "MISSING_USER_ID" }, 400);
 
-  // 2) Recipient email comes from auth.users (admin can read it via
-  //    the service-role client). Locale comes from profiles so the
-  //    template renders in their preferred language.
-  const { data: authUser, error: uErr } = await sb.auth.admin.getUserById(userId);
-  if (uErr || !authUser?.user?.email) {
+  // 2) Recipient email comes from the auth user record (auth_users).
+  //    Locale comes from profiles so the template renders in their
+  //    preferred language.
+  const authUser = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { email: true },
+  });
+  if (!authUser?.email) {
     return json({ ok: false, error: "RECIPIENT_EMAIL_MISSING" }, 400);
   }
-  const recipientEmail = authUser.user.email;
+  const recipientEmail = authUser.email;
 
-  const { data: prof } = await sb
-    .from("profiles")
-    .select("full_name, preferred_locale")
-    .eq("id", userId)
-    .maybeSingle();
-  const recipientName = (prof as any)?.full_name || "there";
-  const recipientLocale = (prof as any)?.preferred_locale || null;
+  const prof = await prisma.profiles.findUnique({
+    where: { id: userId },
+    select: { full_name: true, preferred_locale: true },
+  });
+  const recipientName = prof?.full_name || "there";
+  const recipientLocale = prof?.preferred_locale || null;
 
   // For the approved email we also surface the influencer's handle so
   // they can recognise it in the inbox. For rejected we don't have an
   // influencer_profiles row so this is approval-only.
-  let handle: string | null = (request as any).handle || null;
+  let handle: string | null = request.handle || null;
   if (decision === "approved") {
-    const { data: ip } = await sb
-      .from("influencer_profiles")
-      .select("handle")
-      .eq("user_id", userId)
-      .maybeSingle();
-    if ((ip as any)?.handle) handle = (ip as any).handle;
+    const ip = await prisma.influencer_profiles.findUnique({
+      where: { user_id: userId },
+      select: { handle: true },
+    });
+    if (ip?.handle) handle = ip.handle;
   }
 
   // 3) Render the email body. HTML mirrors the existing transactional

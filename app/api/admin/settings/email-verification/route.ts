@@ -8,7 +8,8 @@
 // gating or lock everyone out instantly.
 
 import { NextResponse } from "next/server";
-import { createAdminClient } from "@/lib/supabaseAdmin";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import { getEmailVerificationConfig } from "@/lib/auth/emailVerification";
 import { requireAdmin } from "@/lib/auth/adminGuard";
 
@@ -27,13 +28,12 @@ export async function GET() {
   const { error } = await requireAdmin();
   if (error) return error;
   const cfg = await getEmailVerificationConfig();
-  return json({ ok: true, ...cfg });
+  return json(jsonSafe({ ok: true, ...cfg }));
 }
 
 export async function POST(req: Request) {
   const { error } = await requireAdmin(req);
   if (error) return error;
-  const supabase = createAdminClient();
 
   const body = await req.json().catch(() => ({}));
   const graceDays = clampInt(body?.graceDays, 1, 90, 7);
@@ -46,14 +46,17 @@ export async function POST(req: Request) {
     );
   }
 
-  const { error: upErr } = await supabase
-    .from("store_settings")
-    .update({
-      email_verification_grace_days: graceDays,
-      email_verification_lockout_days: lockoutDays,
-    })
-    .eq("id", 1);
-  if (upErr) return json({ ok: false, error: upErr.message }, 500);
+  try {
+    await prisma.store_settings.update({
+      where: { id: 1 },
+      data: {
+        email_verification_grace_days: graceDays,
+        email_verification_lockout_days: lockoutDays,
+      },
+    });
+  } catch (upErr: any) {
+    return json({ ok: false, error: upErr?.message ?? "Update failed" }, 500);
+  }
 
   return json({ ok: true, graceDays, lockoutDays });
 }

@@ -2,16 +2,13 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import { requireAdmin } from "@/lib/auth/adminGuard";
 
-// Admin orders LIST. Under NextAuth the browser anon client can still read
-// `orders`/`order_items` (RLS off — the leak we're closing), and `payments`/
-// `dtdc_shipments` are RLS-on (anon gets 0). This routes the whole list
-// assembly through the SERVICE-ROLE client so RLS can be enabled on
-// `orders`/`order_items` without breaking the admin list page.
+// Admin orders LIST (MySQL/Prisma). Admin-gated.
 //
-// It reproduces the page's exact reads: a page of `orders` (with count,
+// Reproduces the page's exact reads: a page of `orders` (with count,
 // stable ordering, and the same status/search filtering), then per-order
 // item counts, latest payment method, and the active DTDC AWB/status. The
 // returned `rows` are the fully enriched AdminOrderRow shape the table
@@ -19,15 +16,9 @@ import { requireAdmin } from "@/lib/auth/adminGuard";
 const json = (d: any, s = 200) =>
   NextResponse.json(d, { status: s, headers: { "cache-control": "no-store" } });
 
-function admin() {
-  return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-}
-
 const PAGE_SIZE = 20;
 
-// address_snapshot can be jsonb OR a stringified JSON.
+// address_snapshot can be JSON OR a stringified JSON.
 function safeParseSnapshot(v: any): any {
   if (!v) return {};
   if (typeof v === "object") return v;
@@ -54,39 +45,37 @@ export async function GET(req: Request) {
       : "all";
 
   const from = (page - 1) * PAGE_SIZE;
-  const to = from + PAGE_SIZE - 1;
-
-  const sb = admin();
 
   try {
-    // Base query with count + stable ordering + pagination.
-    let q = sb
-      .from("orders")
-      .select(
-        "id, order_number, status, total, currency, created_at, address_snapshot",
-        { count: "exact" }
-      )
-      .order("created_at", { ascending: false })
-      .order("id", { ascending: false })
-      .range(from, to);
+    // Base filter: status/search narrowing. "Awaiting shipment" narrows to paid
+    // orders; final "no active shipment" filtering happens after we fetch the
+    // dtdc_shipments rows below. Search is limited to order_number (matches the
+    // page); the page also does client-side name/email filtering on top.
+    const where: any = {};
+    if (filterMode === "awaiting_shipment") where.status = "paid";
+    if (search) where.order_number = { contains: search };
 
-    // "Awaiting shipment" filter narrows to paid orders. Final filtering for
-    // "no active shipment" happens after we fetch the dtdc_shipments rows below.
-    if (filterMode === "awaiting_shipment") {
-      q = q.eq("status", "paid");
-    }
-
-    // Server-side search is limited to order_number (matches the page); the
-    // page also does client-side name/email filtering on top of this.
-    if (search) {
-      q = q.ilike("order_number", `%${search}%`);
-    }
-
-    const { data: ordersData, error: oErr, count } = await q;
-    if (oErr) return json({ ok: false, error: oErr.message }, 500);
+    // Page of orders (with count + stable ordering + pagination).
+    const [ordersData, totalCount] = await Promise.all([
+      prisma.orders.findMany({
+        where,
+        select: {
+          id: true,
+          order_number: true,
+          status: true,
+          total: true,
+          currency: true,
+          created_at: true,
+          address_snapshot: true,
+        },
+        orderBy: [{ created_at: "desc" }, { id: "desc" }],
+        skip: from,
+        take: PAGE_SIZE,
+      }),
+      prisma.orders.count({ where }),
+    ]);
 
     const rawOrders = ordersData || [];
-    const totalCount = count ?? 0;
 
     if (rawOrders.length === 0) {
       return json({ ok: true, rows: [], totalCount });
@@ -95,10 +84,10 @@ export async function GET(req: Request) {
     const orderIds = rawOrders.map((o: any) => o.id);
 
     // Item count (current page only).
-    const { data: itemsData } = await sb
-      .from("order_items")
-      .select("order_id, quantity")
-      .in("order_id", orderIds);
+    const itemsData = await prisma.order_items.findMany({
+      where: { order_id: { in: orderIds } },
+      select: { order_id: true, quantity: true },
+    });
 
     const itemCountMap = new Map<string, number>();
     (itemsData || []).forEach((row: any) => {
@@ -108,12 +97,12 @@ export async function GET(req: Request) {
     });
 
     // Latest payment method (current page only).
-    const { data: paymentsData } = await sb
-      .from("payments")
-      .select("order_id, method, created_at")
-      .in("order_id", orderIds);
+    const paymentsData = await prisma.payments.findMany({
+      where: { order_id: { in: orderIds } },
+      select: { order_id: true, method: true, created_at: true },
+    });
 
-    const paymentMap = new Map<string, { method: string; created_at: string }>();
+    const paymentMap = new Map<string, { method: string; created_at: Date }>();
     (paymentsData || []).forEach((p: any) => {
       const key = p.order_id;
       const existing = paymentMap.get(key);
@@ -127,11 +116,10 @@ export async function GET(req: Request) {
     });
 
     // Active DTDC shipments for the current page.
-    const { data: shipmentsData } = await sb
-      .from("dtdc_shipments")
-      .select("order_id, reference_number, status, is_active")
-      .in("order_id", orderIds)
-      .eq("is_active", true);
+    const shipmentsData = await prisma.dtdc_shipments.findMany({
+      where: { order_id: { in: orderIds }, is_active: true },
+      select: { order_id: true, reference_number: true, status: true, is_active: true },
+    });
 
     const shipmentMap = new Map<string, { awb: string | null; status: string | null }>();
     (shipmentsData || []).forEach((row: any) => {
@@ -168,7 +156,7 @@ export async function GET(req: Request) {
       rows = rows.filter((o) => !o.shipmentAwb);
     }
 
-    return json({ ok: true, rows, totalCount });
+    return json({ ok: true, rows: jsonSafe(rows), totalCount });
   } catch (e: any) {
     return json({ ok: false, error: e?.message || "READ_FAILED" }, 500);
   }

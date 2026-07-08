@@ -1,19 +1,12 @@
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import { requireAdmin } from "@/lib/auth/adminGuard";
 
 // Admin-only single-vendor read + actions. Backend-aware admin check
-// (requireAdmin) + service-role data access so it works without a Supabase
-// session under NextAuth.
-function admin() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { persistSession: false, autoRefreshToken: false } }
-  );
-}
+// (requireAdmin) + Prisma/MySQL data access.
 const json = (d: any, s = 200) =>
   NextResponse.json(d, { status: s, headers: { "cache-control": "no-store" } });
 
@@ -22,23 +15,28 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   const { error } = await requireAdmin();
   if (error) return error;
 
-  const sb = admin();
-  const { data: vendor, error: vErr } = await sb
-    .from("vendors")
-    .select("*")
-    .eq("id", params.id)
-    .maybeSingle();
-  if (vErr) return json({ ok: false, error: vErr.message }, 500);
-  if (!vendor) return json({ ok: false, error: "NOT_FOUND" }, 404);
+  try {
+    const vendor = await prisma.vendors.findUnique({ where: { id: params.id } });
+    if (!vendor) return json({ ok: false, error: "NOT_FOUND" }, 404);
 
-  const { data: products } = await sb
-    .from("products")
-    .select("id, name, slug, price, currency, is_published")
-    .eq("vendor_id", params.id)
-    .order("updated_at", { ascending: false })
-    .limit(25);
+    const products = await prisma.products.findMany({
+      where: { vendor_id: params.id },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        price: true,
+        currency: true,
+        is_published: true,
+      },
+      orderBy: { updated_at: "desc" },
+      take: 25,
+    });
 
-  return json({ ok: true, vendor, products: products ?? [] });
+    return json(jsonSafe({ ok: true, vendor, products: products ?? [] }));
+  } catch (e: any) {
+    return json({ ok: false, error: e?.message }, 500);
+  }
 }
 
 // PATCH /api/admin/vendors/[id] — { action: "approve" | "suspend" | "commission", ... }
@@ -57,7 +55,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       status: "approved",
       rejected_reason: null,
       approved_by: user?.id ?? null,
-      approved_at: new Date().toISOString(),
+      approved_at: new Date(),
     };
   } else if (body.action === "suspend") {
     const to = body.status === "rejected" ? "rejected" : "disabled";
@@ -71,9 +69,11 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     return json({ ok: false, error: "BAD_ACTION" }, 400);
   }
 
-  const sb = admin();
-  const { error: upErr } = await sb.from("vendors").update(patch).eq("id", params.id);
-  if (upErr) return json({ ok: false, error: upErr.message }, 500);
+  try {
+    await prisma.vendors.updateMany({ where: { id: params.id }, data: patch });
+  } catch (e: any) {
+    return json({ ok: false, error: e?.message }, 500);
+  }
 
-  return json({ ok: true, patch });
+  return json(jsonSafe({ ok: true, patch }));
 }

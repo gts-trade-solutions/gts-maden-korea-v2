@@ -14,7 +14,7 @@
 //                       (60s) as the user-facing resend.
 
 import { NextResponse } from "next/server";
-import { createServiceClient } from "@/lib/supabaseServer";
+import { prisma } from "@/lib/db/prisma";
 import {
   canResendVerification,
   getEmailVerificationConfig,
@@ -42,7 +42,6 @@ export async function POST(
 
   const body = await req.json().catch(() => ({}));
   const action = String(body?.action ?? "").trim();
-  const sb = createServiceClient();
 
   if (action === "extend") {
     const days = Math.max(1, Math.min(365, Math.floor(Number(body?.days) || 0)));
@@ -61,25 +60,13 @@ export async function POST(
       : new Date(graceStart.getTime() + cfg.lockoutDays * 86400000);
     const newDeadline = new Date(currentDeadline.getTime() + days * 86400000);
 
-    const { error: upErr } = await sb
-      .from("profiles")
-      .update({
-        email_verification_deadline_override: newDeadline.toISOString(),
-      })
-      .eq("id", userId);
-    if (upErr) return json({ ok: false, error: upErr.message }, 500);
-
-    // Dual-write: under AUTH_BACKEND=nextauth the gate reads
-    // email_verification_deadline_override from MySQL, so mirror it or the
-    // extended deadline is invisible and the user can still be locked out.
     try {
-      const { prisma } = await import("@/lib/db/prisma");
       await prisma.profiles.updateMany({
         where: { id: userId },
         data: { email_verification_deadline_override: newDeadline },
       });
-    } catch (e) {
-      console.error("[verification extend] MySQL mirror failed:", e);
+    } catch (e: any) {
+      return json({ ok: false, error: e?.message }, 500);
     }
 
     return json({
@@ -95,16 +82,18 @@ export async function POST(
   }
 
   if (action === "resend") {
-    // Look up canonical email + locale.
-    const { data: authUser } = await sb.auth.admin.getUserById(userId);
-    if (!authUser?.user?.email)
+    // Look up canonical email (auth_users / prisma.user) + locale (profiles).
+    const authUser = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true },
+    });
+    if (!authUser?.email)
       return json({ ok: false, error: "no_email" }, 400);
 
-    const { data: profile } = await sb
-      .from("profiles")
-      .select("preferred_locale, email_verified_at")
-      .eq("id", userId)
-      .maybeSingle();
+    const profile = await prisma.profiles.findUnique({
+      where: { id: userId },
+      select: { preferred_locale: true, email_verified_at: true },
+    });
 
     if (profile?.email_verified_at)
       return json({ ok: true, alreadyVerified: true });
@@ -118,7 +107,7 @@ export async function POST(
 
     await sendVerificationEmail({
       userId,
-      email: authUser.user.email,
+      email: authUser.email,
       locale: (profile?.preferred_locale as string | null) ?? null,
       origin: new URL(req.url).origin,
     });

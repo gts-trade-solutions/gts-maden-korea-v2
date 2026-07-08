@@ -2,7 +2,8 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import { requireAdmin } from "@/lib/auth/adminGuard";
 
 // Admin-only paginated user list backing /admin/users.
@@ -21,26 +22,18 @@ import { requireAdmin } from "@/lib/auth/adminGuard";
 //
 // Filtering / sorting implementation:
 //   - DB-level: q, joined_from, joined_to, role, country, sort newest/
-//     oldest/name_asc/name_desc. Uses Supabase pagination + exact count.
+//     oldest/name_asc/name_desc. Uses Prisma pagination + count.
 //   - JS-level: verification filter, sort email/recent_activity. When
 //     these are active we fetch all matching rows (capped 1000), filter
 //     + sort + paginate in JS, and return the post-filter count.
 //
-// Why JS for verification: the resolved stage depends on
-// (grace_start, deadline_override, store_settings.lockout_days). Doing
-// it as a single PostgREST filter would need a stored procedure;
-// 1000-row in-memory pass is fine at this app's scale (<100 users today).
+// Email lives on the auth user row (auth_users / prisma.user, keyed by the
+// same id as profiles). last_sign_in_at is not tracked in MySQL/NextAuth, so
+// it is returned as null (recent_activity sort therefore degrades to a stable
+// order).
 
 const json = (d: any, s = 200) =>
   NextResponse.json(d, { status: s, headers: { "cache-control": "no-store" } });
-
-function admin() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { persistSession: false, autoRefreshToken: false } }
-  );
-}
 
 const STAFF_ROLES = ["admin", "super_admin", "vendor"];
 
@@ -88,44 +81,40 @@ export async function GET(req: Request) {
   const verificationFilter = (url.searchParams.get("verification") || "").trim();
   const countryFilter = (url.searchParams.get("country") || "").trim().toUpperCase();
 
-  const sb = admin();
-
   // Step 0 — store config for lockout-day calculation (needed for
   // verification filter / stage display). Defaults match
   // lib/auth/emailVerification.ts constants so behavior is consistent
   // if the column is missing.
-  const { data: settings } = await sb
-    .from("store_settings")
-    .select("email_verification_lockout_days")
-    .eq("id", 1)
-    .maybeSingle();
+  const settings = await prisma.store_settings.findUnique({
+    where: { id: 1 },
+    select: { email_verification_lockout_days: true },
+  });
   const lockoutDays =
     Number(settings?.email_verification_lockout_days) > 0
       ? Number(settings!.email_verification_lockout_days)
       : 30;
 
-  // Step 1 — search-term pre-filter (existing behavior, untouched).
+  // Step 1 — search-term pre-filter. Match full_name / phone on profiles and
+  // email on the auth user row (auth_users). MySQL's default CI collation
+  // makes `contains` case-insensitive.
   let matchedIds: Set<string> | null = null;
   if (q) {
-    const wildcard = `%${q.replace(/[%_]/g, "\\$&")}%`;
-    const [{ data: profMatches }, { data: { users: authMatches } = {} as any }] =
-      await Promise.all([
-        sb
-          .from("profiles")
-          .select("id")
-          .or(`full_name.ilike.${wildcard},phone.ilike.${wildcard}`),
-        sb.auth.admin.listUsers({ page: 1, perPage: 200 }).then((r) => ({
-          data: {
-            users: (r.data?.users ?? []).filter((u) =>
-              (u.email || "").toLowerCase().includes(q.toLowerCase())
-            ),
-          } as any,
-        })),
-      ]);
+    const [profMatches, authMatches] = await Promise.all([
+      prisma.profiles.findMany({
+        where: {
+          OR: [{ full_name: { contains: q } }, { phone: { contains: q } }],
+        },
+        select: { id: true },
+      }),
+      prisma.user.findMany({
+        where: { email: { contains: q } },
+        select: { id: true },
+      }),
+    ]);
 
     matchedIds = new Set<string>();
-    (profMatches ?? []).forEach((r: any) => matchedIds!.add(r.id));
-    (authMatches ?? []).forEach((u: any) => matchedIds!.add(u.id));
+    profMatches.forEach((r) => matchedIds!.add(r.id));
+    authMatches.forEach((u) => matchedIds!.add(u.id));
 
     if (matchedIds.size === 0) {
       return json({
@@ -150,75 +139,96 @@ export async function GET(req: Request) {
     sort === "recent_activity";
 
   // Step 2 — build the profile query with DB-level filters.
-  let pq = sb
-    .from("profiles")
-    .select(
-      "id, full_name, phone, preferred_country, role, created_at, updated_at, email_verified_at, email_verification_grace_starts_at, email_verification_deadline_override",
-      { count: "exact" }
-    );
-  if (matchedIds) pq = pq.in("id", Array.from(matchedIds));
-  if (joinedFromRaw) pq = pq.gte("created_at", joinedFromRaw);
+  const where: Record<string, any> = {};
+  if (matchedIds) where.id = { in: Array.from(matchedIds) };
+  const createdAt: Record<string, Date> = {};
+  if (joinedFromRaw) createdAt.gte = new Date(joinedFromRaw);
   if (joinedToRaw) {
     // Inclusive end-of-day: append T23:59:59.999Z so the day is included.
     const endIso = /\d{4}-\d{2}-\d{2}$/.test(joinedToRaw)
       ? `${joinedToRaw}T23:59:59.999Z`
       : joinedToRaw;
-    pq = pq.lte("created_at", endIso);
+    createdAt.lte = new Date(endIso);
   }
+  if (Object.keys(createdAt).length) where.created_at = createdAt;
   if (roleFilter && ["customer", "admin", "super_admin"].includes(roleFilter)) {
-    pq = pq.eq("role", roleFilter);
+    where.role = roleFilter;
   }
   if (countryFilter) {
-    pq = pq.eq("preferred_country", countryFilter);
+    where.preferred_country = countryFilter;
   }
 
-  // Apply DB sort if possible.
+  // Apply DB sort if possible; otherwise fall back to a deterministic
+  // created_at desc primary order for the JS-sort path.
   const dbSort = DB_SORT[sort];
-  if (dbSort) {
-    pq = pq.order(dbSort.column, { ascending: dbSort.ascending, nullsFirst: false });
-  } else {
-    // JS-sort path; we still want a deterministic primary order so newer
-    // signups appear before older within the same JS-sort tie.
-    pq = pq.order("created_at", { ascending: false });
-  }
+  const orderBy = dbSort
+    ? { [dbSort.column]: dbSort.ascending ? "asc" : "desc" }
+    : { created_at: "desc" };
 
-  let profs: any[] | null = null;
+  const selectFields = {
+    id: true,
+    full_name: true,
+    phone: true,
+    preferred_country: true,
+    role: true,
+    created_at: true,
+    updated_at: true,
+    email_verified_at: true,
+    email_verification_grace_starts_at: true,
+    email_verification_deadline_override: true,
+  } as const;
+
+  let profs: any[] = [];
   let totalAfterDbFilters = 0;
 
-  if (needsJsPath) {
-    // Fetch all matching rows (capped) — we'll filter + sort + paginate
-    // in JS below.
-    const { data, count, error: pErr } = await pq.range(0, 999);
-    if (pErr) return json({ ok: false, error: pErr.message }, 500);
-    profs = data ?? [];
-    totalAfterDbFilters = count ?? profs.length;
-  } else {
-    const from = (page - 1) * limit;
-    const to = from + limit - 1;
-    const { data, count, error: pErr } = await pq.range(from, to);
-    if (pErr) return json({ ok: false, error: pErr.message }, 500);
-    profs = data ?? [];
-    totalAfterDbFilters = count ?? profs.length;
+  try {
+    if (needsJsPath) {
+      // Fetch all matching rows (capped) — we'll filter + sort + paginate
+      // in JS below.
+      const [rows, count] = await Promise.all([
+        prisma.profiles.findMany({
+          where,
+          select: selectFields,
+          orderBy: orderBy as any,
+          take: 1000,
+        }),
+        prisma.profiles.count({ where }),
+      ]);
+      profs = rows;
+      totalAfterDbFilters = count;
+    } else {
+      const skip = (page - 1) * limit;
+      const [rows, count] = await Promise.all([
+        prisma.profiles.findMany({
+          where,
+          select: selectFields,
+          orderBy: orderBy as any,
+          skip,
+          take: limit,
+        }),
+        prisma.profiles.count({ where }),
+      ]);
+      profs = rows;
+      totalAfterDbFilters = count;
+    }
+  } catch (pErr: any) {
+    return json({ ok: false, error: pErr?.message }, 500);
   }
 
-  // Step 3 — fetch auth.users for the matching ids (parallel
-  // getUserById). For the JS-path we may have up to 1000 ids — that's
-  // 1000 parallel requests, which is fine for the SDK but heavy on
-  // latency. Cap concurrency at 25 to be polite.
+  // Step 3 — fetch auth user rows (email) for the matching ids. Batched
+  // read keyed by the same id as profiles.
   const ids = profs.map((p) => p.id as string);
   const authMap = new Map<string, any>();
-  const chunkSize = 25;
-  for (let i = 0; i < ids.length; i += chunkSize) {
-    const chunk = ids.slice(i, i + chunkSize);
-    const results = await Promise.all(
-      chunk.map((id) => sb.auth.admin.getUserById(id))
-    );
-    results.forEach((r, j) => {
-      if (r.data?.user) authMap.set(chunk[j], r.data.user);
+  if (ids.length) {
+    const authUsers = await prisma.user.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, email: true, createdAt: true },
     });
+    authUsers.forEach((u) => authMap.set(u.id, u));
   }
 
-  // Step 4 — assemble merged rows.
+  // Step 4 — assemble merged rows. last_sign_in_at is unavailable in
+  // MySQL/NextAuth and returned as null.
   let users = profs.map((p: any) => {
     const au = authMap.get(p.id);
     return {
@@ -228,8 +238,8 @@ export async function GET(req: Request) {
       phone: p.phone ?? null,
       preferred_country: p.preferred_country ?? null,
       role: p.role ?? "customer",
-      last_sign_in_at: au?.last_sign_in_at ?? null,
-      created_at: p.created_at ?? au?.created_at ?? null,
+      last_sign_in_at: null,
+      created_at: p.created_at ?? au?.createdAt ?? null,
       email_verified_at: p.email_verified_at ?? null,
       email_verification_grace_starts_at:
         p.email_verification_grace_starts_at ?? null,
@@ -285,22 +295,26 @@ export async function GET(req: Request) {
     const total = users.length;
     const startIdx = (page - 1) * limit;
     const sliced = users.slice(startIdx, startIdx + limit);
-    return json({
-      ok: true,
-      total,
-      page,
-      limit,
-      users: sliced,
-      current_user_id: user!.id,
-    });
+    return json(
+      jsonSafe({
+        ok: true,
+        total,
+        page,
+        limit,
+        users: sliced,
+        current_user_id: user!.id,
+      })
+    );
   }
 
-  return json({
-    ok: true,
-    total: totalAfterDbFilters,
-    page,
-    limit,
-    users,
-    current_user_id: user!.id,
-  });
+  return json(
+    jsonSafe({
+      ok: true,
+      total: totalAfterDbFilters,
+      page,
+      limit,
+      users,
+      current_user_id: user!.id,
+    })
+  );
 }

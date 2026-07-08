@@ -2,7 +2,8 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import { requireAdmin } from "@/lib/auth/adminGuard";
 
 // Admin-only role toggle + hard-delete for /admin/users.
@@ -11,9 +12,7 @@ import { requireAdmin } from "@/lib/auth/adminGuard";
 //   body: { role: "customer" | "admin" }
 //
 //   Safety rails:
-//     1. Cannot demote a super_admin — the DB trigger guard_super_admin_role
-//        catches this too, but we return a friendly error here first so
-//        the UI shows something better than "42501 forbidden".
+//     1. Cannot demote a super_admin.
 //     2. Cannot demote yourself — prevents accidental self-lockout.
 //     3. Cannot drop the last admin — the app would be unusable.
 //     4. Cannot set role to anything other than "customer" or "admin".
@@ -22,30 +21,19 @@ import { requireAdmin } from "@/lib/auth/adminGuard";
 // DELETE /api/admin/users/[user_id]
 //   body: { confirmEmail: string }  // must match the user's current email
 //
-//   Hard-deletes the auth.users row. Cascading FKs handle most cleanup
-//   (profiles, orders, carts, addresses, wishlist, reviews via
+//   Hard-deletes the user's MySQL rows (auth_users + profiles). Cascading
+//   FKs handle most cleanup (orders, carts, addresses, wishlist, reviews via
 //   SET NULL, etc.). A few admin-content tables have NO ACTION FKs that
-//   would block the delete — we null those out defensively before
-//   calling auth.admin.deleteUser().
+//   would block the delete — we null those out defensively first.
 //
 //   Safety rails:
 //     - confirmEmail must match (case-insensitive)
-//     - Cannot delete admin / super_admin / vendor / self — these
-//       represent real business records and shouldn't be one-click
-//       deletable
+//     - Cannot delete admin / super_admin / vendor / self
 //     - Returns the list of cleared/affected tables so the UI can show
 //       a small breakdown
 
 const json = (d: any, s = 200) =>
   NextResponse.json(d, { status: s, headers: { "cache-control": "no-store" } });
-
-function admin() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { persistSession: false, autoRefreshToken: false } }
-  );
-}
 
 export async function PATCH(
   req: Request,
@@ -65,8 +53,7 @@ export async function PATCH(
     );
   }
 
-  // Safety rail 2: no self-demote. (Promoting yourself doesn't apply
-  // — you're already an admin, and there's no path to super_admin.)
+  // Safety rail 2: no self-demote.
   if (nextRole === "customer" && targetId === caller!.id) {
     return json(
       { ok: false, error: "CANNOT_DEMOTE_SELF", code: "CANNOT_DEMOTE_SELF" },
@@ -74,15 +61,16 @@ export async function PATCH(
     );
   }
 
-  const sb = admin();
-
   // Read the current role to apply rails 1 + 3.
-  const { data: current, error: rdErr } = await sb
-    .from("profiles")
-    .select("role")
-    .eq("id", targetId)
-    .maybeSingle();
-  if (rdErr) return json({ ok: false, error: rdErr.message }, 500);
+  let current: { role: string } | null;
+  try {
+    current = await prisma.profiles.findUnique({
+      where: { id: targetId },
+      select: { role: true },
+    });
+  } catch (e: any) {
+    return json({ ok: false, error: e?.message }, 500);
+  }
   if (!current) return json({ ok: false, error: "NOT_FOUND" }, 404);
 
   // Safety rail 1: super_admin is immune to demotion via this API.
@@ -97,16 +85,17 @@ export async function PATCH(
     );
   }
 
-  // Safety rail 3: don't drop the last admin. Only matters when
-  // demoting. Counts admin + super_admin together — but since
-  // super_admin can't be demoted, the only way to hit "0 admins" is
-  // if there's no super_admin AND we're demoting the last admin.
+  // Safety rail 3: don't drop the last admin. Only matters when demoting.
+  // Counts admin + super_admin together.
   if (current.role === "admin" && nextRole === "customer") {
-    const { count, error: cntErr } = await sb
-      .from("profiles")
-      .select("id", { count: "exact", head: true })
-      .in("role", ["admin", "super_admin"]);
-    if (cntErr) return json({ ok: false, error: cntErr.message }, 500);
+    let count: number;
+    try {
+      count = await prisma.profiles.count({
+        where: { role: { in: ["admin", "super_admin"] } },
+      });
+    } catch (e: any) {
+      return json({ ok: false, error: e?.message }, 500);
+    }
     if ((count ?? 0) <= 1) {
       return json(
         {
@@ -124,42 +113,18 @@ export async function PATCH(
     return json({ ok: true, role: nextRole, no_op: true });
   }
 
-  const { data, error: upErr } = await sb
-    .from("profiles")
-    .update({ role: nextRole, updated_at: new Date().toISOString() })
-    .eq("id", targetId)
-    .select("id, role")
-    .maybeSingle();
-  if (upErr) {
-    // Surface PostgreSQL trigger errors with a stable code so the UI
-    // can map to a translated string if needed.
-    if ((upErr as any).code === "42501") {
-      return json(
-        {
-          ok: false,
-          error: "CANNOT_MODIFY_SUPER_ADMIN",
-          code: "CANNOT_MODIFY_SUPER_ADMIN",
-        },
-        403
-      );
-    }
-    return json({ ok: false, error: upErr.message }, 500);
-  }
-
-  // Dual-write: mirror the role into MySQL. The NextAuth JWT reads role from
-  // MySQL (profiles.role), so a stale mirror would grant or deny admin access
-  // incorrectly until the next full sync.
+  let updated: { id: string; role: string } | null = null;
   try {
-    const { prisma } = await import("@/lib/db/prisma");
-    await prisma.profiles.update({
+    updated = await prisma.profiles.update({
       where: { id: targetId },
       data: { role: nextRole, updated_at: new Date() },
+      select: { id: true, role: true },
     });
-  } catch (e) {
-    console.error("[dual-write] role change MySQL mirror failed:", e);
+  } catch (e: any) {
+    return json({ ok: false, error: e?.message }, 500);
   }
 
-  return json({ ok: true, role: data?.role ?? nextRole });
+  return json({ ok: true, role: updated?.role ?? nextRole });
 }
 
 export async function DELETE(
@@ -182,15 +147,14 @@ export async function DELETE(
     );
   }
 
-  const sb = admin();
-
-  // Look up the target's email + role to enforce safety rails.
-  const [{ data: authUserRes }, { data: prof }] = await Promise.all([
-    sb.auth.admin.getUserById(targetId),
-    sb.from("profiles").select("role").eq("id", targetId).maybeSingle(),
+  // Look up the target's email (auth_users / prisma.user) + role (profiles)
+  // to enforce safety rails.
+  const [authUser, prof] = await Promise.all([
+    prisma.user.findUnique({ where: { id: targetId }, select: { email: true } }),
+    prisma.profiles.findUnique({ where: { id: targetId }, select: { role: true } }),
   ]);
-  const targetEmail = (authUserRes?.user?.email ?? "").toLowerCase();
-  if (!authUserRes?.user) {
+  const targetEmail = (authUser?.email ?? "").toLowerCase();
+  if (!authUser) {
     return json({ ok: false, error: "NOT_FOUND" }, 404);
   }
 
@@ -207,17 +171,11 @@ export async function DELETE(
   }
 
   // Block vendor deletion — those are real business records linked to
-  // commercial relationships. Admin can demote vendors via the vendor
-  // admin pages first if a hard delete is genuinely needed.
-  //
-  // The FK is on `owner_profile_id` (not `user_id`) — the earlier
-  // mistake silently no-op'd the check, but it would have surfaced
-  // anyway once we hit a real vendor account.
-  const { data: vendorRow } = await sb
-    .from("vendors")
-    .select("id")
-    .eq("owner_profile_id", targetId)
-    .maybeSingle();
+  // commercial relationships. The FK is on `owner_profile_id`.
+  const vendorRow = await prisma.vendors.findFirst({
+    where: { owner_profile_id: targetId },
+    select: { id: true },
+  });
   if (vendorRow) {
     return json(
       {
@@ -249,21 +207,20 @@ export async function DELETE(
   }
 
   // Defensive pre-clear of NO ACTION FKs. For a typical test customer,
-  // these tables shouldn't reference the user — but if any do, the auth
-  // delete would fail with "violates foreign key constraint". Cheaper
-  // to null them than to handle the error.
+  // these tables shouldn't reference the user — but if any do, the row
+  // delete would fail with a foreign key constraint error. Cheaper to null
+  // them than to handle the error. Best-effort: swallow per-table failures
+  // (e.g. a NOT NULL column) and record null for that entry.
   const cleared: Record<string, number | null> = {};
-  const updateNullable = async (table: string, col: string) => {
+  const updateNullable = async (model: string, col: string) => {
     try {
-      const { data, error: uErr } = await sb
-        .from(table)
-        .update({ [col]: null })
-        .eq(col, targetId)
-        .select("id");
-      cleared[`${table}.${col}`] = uErr ? null : (data?.length ?? 0);
+      const res = await (prisma as any)[model].updateMany({
+        where: { [col]: targetId },
+        data: { [col]: null },
+      });
+      cleared[`${model}.${col}`] = res?.count ?? 0;
     } catch (e: any) {
-      // If the table doesn't exist in this env, swallow — best-effort.
-      cleared[`${table}.${col}`] = null;
+      cleared[`${model}.${col}`] = null;
     }
   };
 
@@ -277,36 +234,35 @@ export async function DELETE(
     updateNullable("store_settings", "updated_by"),
   ]);
 
-  // Delete the auth row. Cascading FKs handle the rest (profiles,
-  // orders, carts, addresses, wishlist, reviews → SET NULL,
-  // influencer_*, referral_*, etc.).
-  const { error: delErr } = await sb.auth.admin.deleteUser(targetId);
-  if (delErr) {
+  // Hard-delete the user's MySQL rows. SECURITY — the NextAuth credentials
+  // provider validates the bcrypt hash stored in auth_users, so leaving the
+  // auth_users/profiles rows behind would let a "deleted" account keep
+  // logging in. Delete profiles first so its own cascading dependents go,
+  // then the auth_users row.
+  //
+  // NOTE: the Supabase Auth deletion (sb.auth.admin.deleteUser) is NOT
+  // replicated — see report. Supabase-Auth-side identity/session cleanup is
+  // deferred to the auth phase.
+  try {
+    await prisma.profiles.deleteMany({ where: { id: targetId } });
+    await prisma.user.deleteMany({ where: { id: targetId } });
+  } catch (e: any) {
     return json(
       {
         ok: false,
-        error: delErr.message,
+        error: e?.message,
         cleared,
       },
       500
     );
   }
 
-  // Dual-write: remove the user from MySQL too. SECURITY — the NextAuth
-  // credentials provider validates the bcrypt hash stored in MySQL, so leaving
-  // the MySQL user/profile behind would let a "deleted" account keep logging in.
-  try {
-    const { prisma } = await import("@/lib/db/prisma");
-    await prisma.profiles.deleteMany({ where: { id: targetId } });
-    await prisma.user.deleteMany({ where: { id: targetId } });
-  } catch (e) {
-    console.error("[dual-write] user delete MySQL cleanup failed:", e);
-  }
-
-  return json({
-    ok: true,
-    deletedUserId: targetId,
-    deletedEmail: targetEmail,
-    cleared,
-  });
+  return json(
+    jsonSafe({
+      ok: true,
+      deletedUserId: targetId,
+      deletedEmail: targetEmail,
+      cleared,
+    })
+  );
 }

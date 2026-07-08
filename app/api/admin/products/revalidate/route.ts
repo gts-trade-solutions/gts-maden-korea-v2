@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
 import { revalidatePath, revalidateTag } from "next/cache";
-import { createAdminClient } from "@/lib/supabaseAdmin";
+import { prisma } from "@/lib/db/prisma";
 import { requireAdmin } from "@/lib/auth/adminGuard";
 
 const json = (d: any, s = 200) =>
@@ -26,12 +26,14 @@ export async function POST(req: Request) {
   if (!productId) return json({ ok: false, error: "MISSING_PRODUCT_ID" }, 400);
 
   // Resolve slug + parent slugs so we can revalidate the right paths.
-  const admin = createAdminClient();
-  const { data: prod } = await admin
-    .from("products")
-    .select("slug, brands(slug), categories:category_id(slug)")
-    .eq("id", productId)
-    .maybeSingle();
+  const prod = await prisma.products.findUnique({
+    where: { id: productId },
+    select: {
+      slug: true,
+      brands: { select: { slug: true } },
+      categories: { select: { slug: true } },
+    },
+  });
 
   // Bust the data-cache for every product (cheap, single shared key).
   revalidateTag("products");

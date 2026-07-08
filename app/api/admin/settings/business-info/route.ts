@@ -1,7 +1,8 @@
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import { createAdminClient } from "@/lib/supabaseAdmin";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import { bustBusinessInfoCache, getBusinessInfo } from "@/lib/businessInfo";
 import { requireAdmin } from "@/lib/auth/adminGuard";
 
@@ -11,18 +12,21 @@ const json = (d: any, s = 200) =>
 export async function GET() {
   const { error } = await requireAdmin();
   if (error) return error;
-  const supabase = createAdminClient();
   // Legacy flat shape consumed by the existing settings page state. Brand
   // + partner_role_label come from the raw store_settings row so the admin
   // form can edit them — they're not part of the BusinessInfo type today.
   const info = await getBusinessInfo();
-  const { data: raw } = await supabase
-    .from("store_settings")
-    .select(
-      "brand_legal_entity_name, brand_registered_address, brand_country_code, brand_email, partner_role_label"
-    )
-    .eq("id", 1)
-    .maybeSingle();
+  const raw = jsonSafe(
+    await prisma.store_settings.findFirst({
+      select: {
+        brand_legal_entity_name: true,
+        brand_registered_address: true,
+        brand_country_code: true,
+        brand_email: true,
+        partner_role_label: true,
+      },
+    })
+  );
   const brand = {
     brandLegalEntityName: (raw?.brand_legal_entity_name as string | null) ?? null,
     brandRegisteredAddress:
@@ -33,7 +37,7 @@ export async function GET() {
       (raw?.partner_role_label as string | null) ??
       "Authorized Importer & Distribution Partner",
   };
-  return json({ ok: true, info: { ...info, ...brand } });
+  return json(jsonSafe({ ok: true, info: { ...info, ...brand } }));
 }
 
 // Trim a string field to null when empty so the DB stores meaningful data
@@ -47,7 +51,6 @@ function clean(v: unknown): string | null {
 export async function POST(req: Request) {
   const { user, error } = await requireAdmin(req);
   if (error) return error;
-  const supabase = createAdminClient();
 
   const body = await req.json().catch(() => ({}));
 
@@ -64,7 +67,7 @@ export async function POST(req: Request) {
     cdsco_registration: clean(body.cdscoRegistration),
     jurisdiction_city: clean(body.jurisdictionCity),
     marketplace_disclosure_enabled: !!body.marketplaceDisclosureEnabled,
-    updated_at: new Date().toISOString(),
+    updated_at: new Date(),
     updated_by: user!.id,
   };
 
@@ -85,14 +88,14 @@ export async function POST(req: Request) {
       v ?? "Authorized Importer & Distribution Partner";
   }
 
-  const { error: upErr } = await supabase
-    .from("store_settings")
-    .update(update)
-    .eq("id", 1);
-  if (upErr) return json({ ok: false, error: upErr.message }, 500);
+  try {
+    await prisma.store_settings.update({ where: { id: 1 }, data: update });
+  } catch (e: any) {
+    return json({ ok: false, error: e?.message ?? "Update failed" }, 500);
+  }
 
   bustBusinessInfoCache();
 
   const fresh = await getBusinessInfo();
-  return json({ ok: true, info: fresh });
+  return json(jsonSafe({ ok: true, info: fresh }));
 }

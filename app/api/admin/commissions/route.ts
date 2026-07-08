@@ -1,7 +1,8 @@
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import { requireAdmin } from "@/lib/auth/adminGuard";
 
 // Admin endpoints for managing K-Partnership commission attributions.
@@ -18,14 +19,6 @@ import { requireAdmin } from "@/lib/auth/adminGuard";
 const json = (d: any, s = 200) =>
   NextResponse.json(d, { status: s, headers: { "cache-control": "no-store" } });
 
-function admin() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { persistSession: false, autoRefreshToken: false } }
-  );
-}
-
 const ALLOWED_STATUSES = ["pending", "approved", "voided"] as const;
 
 export async function GET(req: Request) {
@@ -40,47 +33,65 @@ export async function GET(req: Request) {
   const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit") || 100)));
   const offset = Math.max(0, Number(url.searchParams.get("offset") || 0));
 
-  const sb = admin();
-  // Pull the attribution + the order's order_number + paid_at for
-  // display, and the influencer's handle for at-a-glance ID. Two
-  // separate queries because PostgREST doesn't gracefully embed a
-  // 1-to-1 join across two non-FK relationships in one go for our
-  // schema shape. Acceptable — the admin page paginates 100/screen.
-  const { data: rows, error: dbErr, count } = await sb
-    .from("order_attributions")
-    .select(
-      "order_id, influencer_id, commission_amount, commission_percent, currency, status, created_at, attributed_by, promo_code_id",
-      { count: "exact" }
-    )
-    .eq("status", status)
-    .order("created_at", { ascending: false })
-    .range(offset, offset + limit - 1);
-  if (dbErr) return json({ ok: false, error: dbErr.message }, 500);
+  // Pull the attribution rows + a total count for pagination. Order/
+  // influencer detail is enriched below with one query each (no FK
+  // relation in the schema across these ids). Acceptable — the admin
+  // page paginates 100/screen.
+  const [rows, count] = await Promise.all([
+    prisma.order_attributions.findMany({
+      where: { status },
+      orderBy: { created_at: "desc" },
+      skip: offset,
+      take: limit,
+      select: {
+        order_id: true,
+        influencer_id: true,
+        commission_amount: true,
+        commission_percent: true,
+        currency: true,
+        status: true,
+        created_at: true,
+        attributed_by: true,
+        promo_code_id: true,
+      },
+    }),
+    prisma.order_attributions.count({ where: { status } }),
+  ]);
 
   // Enrich with order_number + paid_at + influencer handle in one
   // pass each. Small N (page size = 100).
-  const orderIds = Array.from(new Set((rows ?? []).map((r) => r.order_id)));
-  const inflIds = Array.from(new Set((rows ?? []).map((r) => r.influencer_id)));
+  const orderIds = Array.from(new Set(rows.map((r) => r.order_id)));
+  const inflIds = Array.from(new Set(rows.map((r) => r.influencer_id)));
 
-  const [{ data: orderRows }, { data: inflRows }] = await Promise.all([
-    sb.from("orders")
-      .select("id, order_number, paid_at, status, total_inr, total, currency")
-      .in("id", orderIds),
-    sb.from("influencer_profiles")
-      .select("user_id, handle, display_name")
-      .in("user_id", inflIds),
+  const [orderRows, inflRows] = await Promise.all([
+    prisma.orders.findMany({
+      where: { id: { in: orderIds } },
+      select: {
+        id: true,
+        order_number: true,
+        paid_at: true,
+        status: true,
+        total_inr: true,
+        total: true,
+        currency: true,
+      },
+    }),
+    prisma.influencer_profiles.findMany({
+      where: { user_id: { in: inflIds } },
+      select: { user_id: true, handle: true, display_name: true },
+    }),
   ]);
 
-  const orderMap = new Map((orderRows ?? []).map((o: any) => [o.id, o]));
-  const inflMap = new Map((inflRows ?? []).map((i: any) => [i.user_id, i]));
+  const orderMap = new Map(orderRows.map((o: any) => [o.id, o]));
+  const inflMap = new Map(inflRows.map((i: any) => [i.user_id, i]));
 
-  const enriched = (rows ?? []).map((r: any) => ({
+  const enriched = rows.map((r: any) => ({
     ...r,
     order: orderMap.get(r.order_id) ?? null,
     influencer: inflMap.get(r.influencer_id) ?? null,
   }));
 
-  return json({ ok: true, total: count ?? enriched.length, rows: enriched });
+  return json({ ok: true, total: count ?? enriched.length, rows: jsonSafe(enriched) });
 }
 
 // Flip a single attribution's status. Body: { order_id, status }.
@@ -97,20 +108,13 @@ export async function PATCH(req: Request) {
     return json({ ok: false, error: "INVALID_STATUS" }, 400);
   }
 
-  const sb = admin();
-  const { error: upErr } = await sb
-    .from("order_attributions")
-    .update({ status })
-    .eq("order_id", orderId);
-  if (upErr) return json({ ok: false, error: upErr.message }, 500);
-
-  // Dual-write: mirror the attribution status into MySQL (the influencer
-  // withdraw balance reads approved/void attributions from MySQL).
   try {
-    const { mirrorOrderAttributionIntoMysql } = await import("@/lib/data/attribution");
-    await mirrorOrderAttributionIntoMysql(sb, orderId);
-  } catch (e) {
-    console.error("[dual-write] commission status MySQL mirror failed:", e);
+    await prisma.order_attributions.updateMany({
+      where: { order_id: orderId },
+      data: { status },
+    });
+  } catch (e: any) {
+    return json({ ok: false, error: e?.message || "UPDATE_FAILED" }, 500);
   }
 
   return json({ ok: true });

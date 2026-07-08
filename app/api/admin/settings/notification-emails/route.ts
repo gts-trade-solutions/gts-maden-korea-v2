@@ -1,7 +1,9 @@
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { randomUUID } from "node:crypto";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import { bustAdminRecipientsCache } from "@/lib/notificationRecipients";
 import { requireAdmin } from "@/lib/auth/adminGuard";
 
@@ -13,14 +15,6 @@ import { requireAdmin } from "@/lib/auth/adminGuard";
 const json = (d: any, s = 200) =>
   NextResponse.json(d, { status: s, headers: { "cache-control": "no-store" } });
 
-function admin() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { persistSession: false, autoRefreshToken: false } }
-  );
-}
-
 function isValidEmail(email: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
@@ -29,13 +23,23 @@ export async function GET() {
   const { error } = await requireAdmin();
   if (error) return error;
 
-  const sb = admin();
-  const { data, error: dbErr } = await sb
-    .from("notification_recipients")
-    .select("id, email, label, active, created_at, updated_at")
-    .order("email", { ascending: true });
-  if (dbErr) return json({ ok: false, error: dbErr.message }, 500);
-  return json({ ok: true, recipients: data ?? [] });
+  let data;
+  try {
+    data = await prisma.notification_recipients.findMany({
+      select: {
+        id: true,
+        email: true,
+        label: true,
+        active: true,
+        created_at: true,
+        updated_at: true,
+      },
+      orderBy: { email: "asc" },
+    });
+  } catch (dbErr: any) {
+    return json({ ok: false, error: dbErr?.message ?? "Read failed" }, 500);
+  }
+  return json({ ok: true, recipients: jsonSafe(data ?? []) });
 }
 
 // Add a new recipient. Body: { email, label? }
@@ -53,12 +57,15 @@ export async function POST(req: Request) {
     return json({ ok: false, error: "INVALID_EMAIL" }, 400);
   }
 
-  const sb = admin();
-  const { error: upErr } = await sb
-    .from("notification_recipients")
-    .upsert({ email, label, active: true }, { onConflict: "email" });
-
-  if (upErr) return json({ ok: false, error: upErr.message }, 500);
+  try {
+    await prisma.notification_recipients.upsert({
+      where: { email },
+      update: { label, active: true },
+      create: { id: randomUUID(), email, label, active: true },
+    });
+  } catch (upErr: any) {
+    return json({ ok: false, error: upErr?.message ?? "Update failed" }, 500);
+  }
 
   bustAdminRecipientsCache();
   return json({ ok: true });
@@ -74,12 +81,14 @@ export async function PATCH(req: Request) {
   const active = !!body.active;
   if (!id) return json({ ok: false, error: "MISSING_ID" }, 400);
 
-  const sb = admin();
-  const { error: upErr } = await sb
-    .from("notification_recipients")
-    .update({ active })
-    .eq("id", id);
-  if (upErr) return json({ ok: false, error: upErr.message }, 500);
+  try {
+    await prisma.notification_recipients.updateMany({
+      where: { id },
+      data: { active },
+    });
+  } catch (upErr: any) {
+    return json({ ok: false, error: upErr?.message ?? "Update failed" }, 500);
+  }
 
   bustAdminRecipientsCache();
   return json({ ok: true });
@@ -94,12 +103,11 @@ export async function DELETE(req: Request) {
   const id = url.searchParams.get("id");
   if (!id) return json({ ok: false, error: "MISSING_ID" }, 400);
 
-  const sb = admin();
-  const { error: delErr } = await sb
-    .from("notification_recipients")
-    .delete()
-    .eq("id", id);
-  if (delErr) return json({ ok: false, error: delErr.message }, 500);
+  try {
+    await prisma.notification_recipients.deleteMany({ where: { id } });
+  } catch (delErr: any) {
+    return json({ ok: false, error: delErr?.message ?? "Delete failed" }, 500);
+  }
 
   bustAdminRecipientsCache();
   return json({ ok: true });

@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
 import { revalidatePath, revalidateTag } from "next/cache";
-import { createAdminClient } from "@/lib/supabaseAdmin";
+import { prisma } from "@/lib/db/prisma";
 import { requireAdmin } from "@/lib/auth/adminGuard";
 
 const json = (d: any, s = 200) =>
@@ -17,7 +17,6 @@ const json = (d: any, s = 200) =>
 export async function POST(req: Request) {
   const { error } = await requireAdmin(req);
   if (error) return error;
-  const supabase = createAdminClient();
 
   const body = await req.json().catch(() => ({}));
   const productId = String(body.productId || "").trim();
@@ -27,11 +26,10 @@ export async function POST(req: Request) {
   revalidateTag("story-blocks");
 
   // Resolve the slug so we can drop the rendered HTML for that product page.
-  const { data: prod } = await supabase
-    .from("products")
-    .select("slug")
-    .eq("id", productId)
-    .maybeSingle();
+  const prod = await prisma.products.findUnique({
+    where: { id: productId },
+    select: { slug: true },
+  });
   const slug = prod?.slug as string | undefined;
   if (slug) revalidatePath(`/products/${slug}`);
 

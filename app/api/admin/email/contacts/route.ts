@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServiceClient } from "@/lib/supabaseServer";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import { requireAdmin } from "@/lib/auth/adminGuard";
 
 export const runtime = "nodejs";
@@ -11,7 +12,6 @@ export async function GET(req: NextRequest) {
   const { error: authError } = await requireAdmin(req);
   if (authError) return authError;
 
-  const supabase = createServiceClient();
   const type = (req.nextUrl.searchParams.get("type") as FilterType) || "all";
 
   console.log("contacts API type =", type);
@@ -28,35 +28,34 @@ export async function GET(req: NextRequest) {
 
     if (unique.length === 0) return new Set<string>();
 
-    const { data, error } = await supabase
-      .from("email_unsubscribe")
-      .select("email")
-      .in("email", unique);
-
-    if (error) {
+    try {
+      const data = await prisma.email_unsubscribe.findMany({
+        where: { email: { in: unique } },
+        select: { email: true },
+      });
+      return new Set(data.map((r) => r.email.toLowerCase()));
+    } catch (error) {
       console.error("Failed to load unsubscribe list:", error);
       return new Set<string>();
     }
-
-    return new Set((data || []).map((r: any) => r.email.toLowerCase()));
   }
 
   // ========== ALL CONTACTS ==========
   // Only data from email_contact (your imported contacts)
   if (type === "all") {
-    const { data, error } = await supabase
-      .from("email_contact")
-      .select("id, email, name, is_registered, created_at")
-      .order("created_at", { ascending: false });
-
-    console.log(
-      "contacts API ALL SIMPLE -> rows:",
-      data?.length,
-      "error:",
-      error
-    );
-
-    if (error) {
+    let data;
+    try {
+      data = await prisma.email_contact.findMany({
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          is_registered: true,
+          created_at: true,
+        },
+        orderBy: { created_at: "desc" },
+      });
+    } catch (error) {
       console.error(error);
       return NextResponse.json(
         { error: "Failed to fetch contacts" },
@@ -64,13 +63,15 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    console.log("contacts API ALL SIMPLE -> rows:", data?.length);
+
     const emails = (data || [])
-      .map((c: any) => c.email as string | null)
+      .map((c) => c.email as string | null)
       .filter(Boolean) as string[];
 
     const unsubSet = await getUnsubscribedSet(emails);
 
-    const withFlag = (data || []).map((c: any) => ({
+    const withFlag = (data || []).map((c) => ({
       ...c,
       categories: [], // we don't join categories here to avoid issues
       unsubscribed: c.email
@@ -78,34 +79,23 @@ export async function GET(req: NextRequest) {
         : false,
     }));
 
-    return NextResponse.json({ contacts: withFlag });
+    return NextResponse.json({ contacts: jsonSafe(withFlag) });
   }
 
-  // ========== WEBSITE USERS ONLY (Supabase Auth users) ==========
+  // ========== WEBSITE USERS ONLY (registered auth users) ==========
   if (type === "registered") {
-    let page = 1;
-    const perPage = 1000;
-    const allUsers: any[] = [];
-
-    while (true) {
-      const { data, error } = await (supabase as any).auth.admin.listUsers({
-        page,
-        perPage,
+    let allUsers;
+    try {
+      allUsers = await prisma.user.findMany({
+        where: { email: { not: null } },
+        select: { id: true, email: true, name: true, createdAt: true },
       });
-
-      if (error) {
-        console.error("Error listing auth users:", error);
-        return NextResponse.json(
-          { error: "Failed to fetch website users" },
-          { status: 500 }
-        );
-      }
-
-      const users = data?.users || [];
-      allUsers.push(...users);
-
-      if (users.length < perPage) break;
-      page += 1;
+    } catch (error) {
+      console.error("Error listing auth users:", error);
+      return NextResponse.json(
+        { error: "Failed to fetch website users" },
+        { status: 500 }
+      );
     }
 
     console.log("contacts API registered -> auth users:", allUsers.length);
@@ -116,28 +106,38 @@ export async function GET(req: NextRequest) {
 
     const unsubSet = await getUnsubscribedSet(emails);
 
+    // Prefer the canonical profile name (profiles.full_name); fall back to the
+    // NextAuth auth-user name. Mirrors the merge convention used across the
+    // admin user reads (see /api/admin/users/lookup).
+    const ids = allUsers.map((u) => u.id);
+    const profs =
+      ids.length > 0
+        ? await prisma.profiles.findMany({
+            where: { id: { in: ids } },
+            select: { id: true, full_name: true },
+          })
+        : [];
+    const nameMap = new Map<string, string | null>();
+    for (const p of profs) nameMap.set(p.id, p.full_name ?? null);
+
     const contacts = allUsers
       .filter((u) => !!u.email)
       .map((u) => {
         const email = u.email as string;
-        const created_at = u.created_at as string;
-        const name =
-          (u.user_metadata && u.user_metadata.full_name) ||
-          (u.user_metadata && u.user_metadata.name) ||
-          null;
+        const name = nameMap.get(u.id) ?? u.name ?? null;
 
         return {
           id: u.id as string,
           email,
           name,
           is_registered: true, // website user
-          created_at,
+          created_at: u.createdAt,
           categories: [] as any[],
           unsubscribed: unsubSet.has(email.toLowerCase()),
         };
       });
 
-    return NextResponse.json({ contacts });
+    return NextResponse.json({ contacts: jsonSafe(contacts) });
   }
 
   return NextResponse.json({ contacts: [] });

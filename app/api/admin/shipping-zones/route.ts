@@ -1,7 +1,8 @@
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import { createAdminClient } from "@/lib/supabaseAdmin";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import { requireAdmin } from "@/lib/auth/adminGuard";
 
 const json = (d: any, s = 200) =>
@@ -18,22 +19,28 @@ type ZoneRow = {
 export async function GET() {
   const { error } = await requireAdmin();
   if (error) return error;
-  const supabase = createAdminClient();
 
-  const { data, error: qErr } = await supabase
-    .from("shipping_zones")
-    .select("zone, label, eta_days_min, eta_days_max, sort_order")
-    .order("sort_order", { ascending: true });
+  try {
+    const zones = await prisma.shipping_zones.findMany({
+      select: {
+        zone: true,
+        label: true,
+        eta_days_min: true,
+        eta_days_max: true,
+        sort_order: true,
+      },
+      orderBy: { sort_order: "asc" },
+    });
 
-  if (qErr) return json({ ok: false, error: qErr.message }, 500);
-
-  return json({ ok: true, zones: data ?? [] });
+    return json(jsonSafe({ ok: true, zones: zones ?? [] }));
+  } catch (e: any) {
+    return json({ ok: false, error: e?.message }, 500);
+  }
 }
 
 export async function POST(req: Request) {
   const { user, error } = await requireAdmin(req);
   if (error) return error;
-  const supabase = createAdminClient();
 
   const body = await req.json().catch(() => ({}));
   const zones = body?.zones;
@@ -58,16 +65,19 @@ export async function POST(req: Request) {
   // an upsert and avoids accidentally overwriting label/sort_order, which
   // are managed via migrations only.
   for (const u of updates) {
-    const { error: upErr } = await supabase
-      .from("shipping_zones")
-      .update({
-        eta_days_min: u.eta_days_min,
-        eta_days_max: u.eta_days_max,
-        updated_at: new Date().toISOString(),
-        updated_by: user!.id,
-      })
-      .eq("zone", u.zone);
-    if (upErr) return json({ ok: false, error: upErr.message }, 500);
+    try {
+      await prisma.shipping_zones.updateMany({
+        where: { zone: u.zone },
+        data: {
+          eta_days_min: u.eta_days_min,
+          eta_days_max: u.eta_days_max,
+          updated_at: new Date(),
+          updated_by: user!.id,
+        },
+      });
+    } catch (e: any) {
+      return json({ ok: false, error: e?.message }, 500);
+    }
   }
 
   return json({ ok: true });

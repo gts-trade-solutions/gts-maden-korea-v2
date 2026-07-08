@@ -6,7 +6,8 @@
 // Bounded server-side: 1..60 seconds.
 
 import { NextResponse } from "next/server";
-import { createAdminClient } from "@/lib/supabaseAdmin";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 import { requireAdmin } from "@/lib/auth/adminGuard";
 
 export const dynamic = "force-dynamic";
@@ -29,38 +30,40 @@ function clampScroll(v: unknown): number {
 export async function GET() {
   const { error } = await requireAdmin();
   if (error) return error;
-  const supabase = createAdminClient();
-  const { data } = await supabase
-    .from("store_settings")
-    .select(
-      "cookie_consent_delay_seconds, cookie_consent_scroll_threshold"
-    )
-    .eq("id", 1)
-    .maybeSingle();
-  return json({
-    ok: true,
-    delaySeconds: clampDelay(data?.cookie_consent_delay_seconds ?? 7),
-    scrollThreshold: clampScroll(data?.cookie_consent_scroll_threshold ?? 1),
+  const data = await prisma.store_settings.findFirst({
+    select: {
+      cookie_consent_delay_seconds: true,
+      cookie_consent_scroll_threshold: true,
+    },
   });
+  return json(
+    jsonSafe({
+      ok: true,
+      delaySeconds: clampDelay(data?.cookie_consent_delay_seconds ?? 7),
+      scrollThreshold: clampScroll(data?.cookie_consent_scroll_threshold ?? 1),
+    })
+  );
 }
 
 export async function POST(req: Request) {
   const { error } = await requireAdmin(req);
   if (error) return error;
-  const supabase = createAdminClient();
 
   const body = await req.json().catch(() => ({}));
   const delaySeconds = clampDelay(body?.delaySeconds);
   const scrollThreshold = clampScroll(body?.scrollThreshold);
 
-  const { error: upErr } = await supabase
-    .from("store_settings")
-    .update({
-      cookie_consent_delay_seconds: delaySeconds,
-      cookie_consent_scroll_threshold: scrollThreshold,
-    })
-    .eq("id", 1);
-  if (upErr) return json({ ok: false, error: upErr.message }, 500);
+  try {
+    await prisma.store_settings.update({
+      where: { id: 1 },
+      data: {
+        cookie_consent_delay_seconds: delaySeconds,
+        cookie_consent_scroll_threshold: scrollThreshold,
+      },
+    });
+  } catch (upErr: any) {
+    return json({ ok: false, error: upErr?.message ?? "Update failed" }, 500);
+  }
 
   return json({ ok: true, delaySeconds, scrollThreshold });
 }
