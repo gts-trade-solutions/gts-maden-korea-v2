@@ -141,11 +141,54 @@ export async function POST(req: NextRequest) {
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
+    // Money backend selector. Under MONEY_BACKEND=mysql the payment
+    // finalization (order load + mark-paid, payment record, attribution,
+    // promo-use increment, cart clear) runs directly against MySQL via
+    // Prisma and the Supabase->MySQL mirrors are skipped (MySQL is the
+    // source of truth). Otherwise the original Supabase path runs unchanged
+    // and re-mirrors into MySQL. Signature verification, the SES emails, and
+    // best-effort telemetry (admin bell, server order_placed event, optional
+    // DTDC) are shared across both branches.
+    const MONEY_MYSQL = process.env.MONEY_BACKEND === "mysql";
+
     // 2) Load order (+ fields we use)
-    const { data: order, error: oErr } = await admin
-      .from("orders")
-      .select(
-        `
+    let order: any = null;
+    let oErr: any = null;
+    if (MONEY_MYSQL) {
+      const { prisma } = await import("@/lib/db/prisma");
+      order = await prisma.orders
+        .findUnique({
+          where: { id: app_order_id },
+          select: {
+            id: true,
+            user_id: true,
+            status: true,
+            subtotal: true,
+            shipping_fee: true,
+            discount_total: true,
+            total: true,
+            subtotal_inr: true,
+            shipping_fee_inr: true,
+            discount_total_inr: true,
+            total_inr: true,
+            currency: true,
+            fx_rate_snapshot: true,
+            recipient_locale: true,
+            order_number: true,
+            address_snapshot: true,
+            promo_code_id: true,
+            promo_snapshot: true,
+          },
+        })
+        .catch((e: any) => {
+          oErr = e;
+          return null;
+        });
+    } else {
+      const res = await admin
+        .from("orders")
+        .select(
+          `
         id,
         user_id,
         status,
@@ -165,9 +208,12 @@ export async function POST(req: NextRequest) {
         promo_code_id,
         promo_snapshot
       `
-      )
-      .eq("id", app_order_id)
-      .maybeSingle();
+        )
+        .eq("id", app_order_id)
+        .maybeSingle();
+      order = res.data;
+      oErr = res.error;
+    }
 
     dbg.push({ step: "order.load", error: oErr?.message, order });
     if (oErr || !order) {
@@ -205,13 +251,40 @@ export async function POST(req: NextRequest) {
       : "INR";
 
     // 3) Existing attribution?
-    const { data: attrib, error: aErr } = await admin
-      .from("order_attributions")
-      .select(
-        "order_id, influencer_id, promo_code_id, attributed_by, discount_percent, commission_percent, commission_amount, currency, status"
-      )
-      .eq("order_id", order.id)
-      .maybeSingle();
+    let attrib: any = null;
+    let aErr: any = null;
+    if (MONEY_MYSQL) {
+      const { prisma } = await import("@/lib/db/prisma");
+      attrib = await prisma.order_attributions
+        .findUnique({
+          where: { order_id: order.id },
+          select: {
+            order_id: true,
+            influencer_id: true,
+            promo_code_id: true,
+            attributed_by: true,
+            discount_percent: true,
+            commission_percent: true,
+            commission_amount: true,
+            currency: true,
+            status: true,
+          },
+        })
+        .catch((e: any) => {
+          aErr = e;
+          return null;
+        });
+    } else {
+      const res = await admin
+        .from("order_attributions")
+        .select(
+          "order_id, influencer_id, promo_code_id, attributed_by, discount_percent, commission_percent, commission_amount, currency, status"
+        )
+        .eq("order_id", order.id)
+        .maybeSingle();
+      attrib = res.data;
+      aErr = res.error;
+    }
     dbg.push({ step: "attrib.load", error: aErr?.message, attrib });
 
     let discountPct = attrib?.discount_percent
@@ -228,6 +301,22 @@ export async function POST(req: NextRequest) {
 
     const tryLoadPromoById = async (id?: string | null) => {
       if (!id) return null;
+      if (MONEY_MYSQL) {
+        const { prisma } = await import("@/lib/db/prisma");
+        const promo = await prisma.promo_codes
+          .findUnique({
+            where: { id },
+            select: {
+              id: true,
+              influencer_id: true,
+              discount_percent: true,
+              commission_percent: true,
+            },
+          })
+          .catch(() => null);
+        dbg.push({ step: "promo.lookup", id, promo });
+        return promo || null;
+      }
       const { data: promo, error } = await admin
         .from("promo_codes")
         .select("id, influencer_id, discount_percent, commission_percent")
@@ -356,14 +445,24 @@ export async function POST(req: NextRequest) {
     // a return-window buffer.
     let autoApproveDays = 0;
     try {
-      const { data: settings } = await admin
-        .from("store_settings")
-        .select("commission_auto_approve_days")
-        .eq("id", 1)
-        .maybeSingle();
-      const raw = Number((settings as any)?.commission_auto_approve_days);
+      let settings: any = null;
+      if (MONEY_MYSQL) {
+        const { prisma } = await import("@/lib/db/prisma");
+        settings = await prisma.store_settings.findUnique({
+          where: { id: 1 },
+          select: { commission_auto_approve_days: true },
+        });
+      } else {
+        const res = await admin
+          .from("store_settings")
+          .select("commission_auto_approve_days")
+          .eq("id", 1)
+          .maybeSingle();
+        settings = res.data;
+      }
+      const rawDays = Number((settings as any)?.commission_auto_approve_days);
       autoApproveDays =
-        Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 0;
+        Number.isFinite(rawDays) && rawDays >= 0 ? Math.floor(rawDays) : 0;
     } catch (e: any) {
       dbg.push({ step: "settings.auto_approve.error", error: e?.message });
     }
@@ -374,23 +473,11 @@ export async function POST(req: NextRequest) {
     // Currency always 'INR' so dashboard sums + payout availability
     // math never mix currencies regardless of the buyer's currency.
     if (influencerId) {
-      const ins = await admin.from("order_attributions").insert({
-        order_id: order.id,
-        influencer_id: influencerId,
-        promo_code_id: promoCodeId ?? null,
-        attributed_by: attributedBy ?? (promoCodeId ? "promo" : "link"),
-        discount_percent: discountPct,
-        commission_percent: commissionPct,
-        commission_amount: commissionAmount,
-        currency: "INR",
-        status: initialAttribStatus,
-      });
-      dbg.push({ step: "attrib.insert", error: ins.error?.message });
-
-      if (ins.error) {
-        const upd = await admin
-          .from("order_attributions")
-          .update({
+      if (MONEY_MYSQL) {
+        try {
+          const { upsertOrderAttribution } = await import("@/lib/data/payments");
+          await upsertOrderAttribution({
+            order_id: order.id,
             influencer_id: influencerId,
             promo_code_id: promoCodeId ?? null,
             attributed_by: attributedBy ?? (promoCodeId ? "promo" : "link"),
@@ -399,9 +486,41 @@ export async function POST(req: NextRequest) {
             commission_amount: commissionAmount,
             currency: "INR",
             status: initialAttribStatus,
-          })
-          .eq("order_id", order.id);
-        dbg.push({ step: "attrib.update", error: upd.error?.message });
+          });
+          dbg.push({ step: "attrib.upsert", mysql: true, ok: true });
+        } catch (e: any) {
+          dbg.push({ step: "attrib.upsert", mysql: true, error: e?.message });
+        }
+      } else {
+        const ins = await admin.from("order_attributions").insert({
+          order_id: order.id,
+          influencer_id: influencerId,
+          promo_code_id: promoCodeId ?? null,
+          attributed_by: attributedBy ?? (promoCodeId ? "promo" : "link"),
+          discount_percent: discountPct,
+          commission_percent: commissionPct,
+          commission_amount: commissionAmount,
+          currency: "INR",
+          status: initialAttribStatus,
+        });
+        dbg.push({ step: "attrib.insert", error: ins.error?.message });
+
+        if (ins.error) {
+          const upd = await admin
+            .from("order_attributions")
+            .update({
+              influencer_id: influencerId,
+              promo_code_id: promoCodeId ?? null,
+              attributed_by: attributedBy ?? (promoCodeId ? "promo" : "link"),
+              discount_percent: discountPct,
+              commission_percent: commissionPct,
+              commission_amount: commissionAmount,
+              currency: "INR",
+              status: initialAttribStatus,
+            })
+            .eq("order_id", order.id);
+          dbg.push({ step: "attrib.update", error: upd.error?.message });
+        }
       }
     } else {
       dbg.push({ step: "attrib.skip", reason: "no influencerId resolved" });
@@ -421,18 +540,37 @@ export async function POST(req: NextRequest) {
         ? money(fromRazorpayMinorUnits(ro.amount_paid, orderCurrency))
         : computedFinal;
 
-    const updOrder = await admin
-      .from("orders")
-      .update({
-        status: "paid",
-        discount_total: discountAmount,
-        total: paidAmount,
-        payment_provider: "razorpay",
-        payment_reference: razorpay_payment_id,
-        payment_meta: raw ? { raw } : null,
-        paid_at: new Date().toISOString(),
-      })
-      .eq("id", order.id);
+    let updOrderErrorMsg: string | undefined;
+    if (MONEY_MYSQL) {
+      try {
+        const { updateOrderRow } = await import("@/lib/data/payments");
+        await updateOrderRow(order.id, {
+          status: "paid",
+          discount_total: discountAmount,
+          total: paidAmount,
+          payment_provider: "razorpay",
+          payment_reference: razorpay_payment_id,
+          payment_meta: raw ? { raw } : null,
+          paid_at: new Date(),
+        });
+      } catch (e: any) {
+        updOrderErrorMsg = e?.message || String(e);
+      }
+    } else {
+      const updOrder = await admin
+        .from("orders")
+        .update({
+          status: "paid",
+          discount_total: discountAmount,
+          total: paidAmount,
+          payment_provider: "razorpay",
+          payment_reference: razorpay_payment_id,
+          payment_meta: raw ? { raw } : null,
+          paid_at: new Date().toISOString(),
+        })
+        .eq("id", order.id);
+      updOrderErrorMsg = updOrder.error?.message;
+    }
 
     // Admin bell notification — best-effort, never fails the payment.
     void createAdminNotification({
@@ -449,19 +587,39 @@ export async function POST(req: NextRequest) {
     // refund / reporting flows have a real record to read. Best-effort —
     // if it fails we log but don't fail the payment.
     try {
-      const payIns = await admin.from("payments").insert({
-        order_id: order.id,
-        provider: "razorpay",
-        provider_payment_id: razorpay_payment_id,
-        provider_order_id: razorpay_order_id,
-        method: raw?.method ?? null,
-        status: "captured",
-        amount: paidAmount,
-        currency: orderCurrency,
-        signature: razorpay_signature,
-        raw: raw ?? null,
-      });
-      dbg.push({ step: "payments.insert", error: payIns.error?.message });
+      if (MONEY_MYSQL) {
+        const { prisma } = await import("@/lib/db/prisma");
+        await prisma.payments.create({
+          data: {
+            id: crypto.randomUUID(),
+            order_id: order.id,
+            provider: "razorpay",
+            provider_payment_id: razorpay_payment_id,
+            provider_order_id: razorpay_order_id,
+            method: raw?.method ?? null,
+            status: "captured",
+            amount: paidAmount,
+            currency: orderCurrency,
+            signature: razorpay_signature,
+            raw: raw ?? null,
+          },
+        });
+        dbg.push({ step: "payments.insert", mysql: true });
+      } else {
+        const payIns = await admin.from("payments").insert({
+          order_id: order.id,
+          provider: "razorpay",
+          provider_payment_id: razorpay_payment_id,
+          provider_order_id: razorpay_order_id,
+          method: raw?.method ?? null,
+          status: "captured",
+          amount: paidAmount,
+          currency: orderCurrency,
+          signature: razorpay_signature,
+          raw: raw ?? null,
+        });
+        dbg.push({ step: "payments.insert", error: payIns.error?.message });
+      }
     } catch (err: any) {
       dbg.push({ step: "payments.insert", error: err?.message });
     }
@@ -558,83 +716,128 @@ export async function POST(req: NextRequest) {
 
     dbg.push({
       step: "order.update",
-      error: updOrder.error?.message,
+      error: updOrderErrorMsg,
       write: { discountAmount, paidAmount, shippingFee },
     });
-    if (updOrder.error) {
+    if (updOrderErrorMsg) {
       const res = {
         ok: false,
-        error: updOrder.error.message,
+        error: updOrderErrorMsg,
         debug: WANT_DEBUG ? dbg : undefined,
       };
       return NextResponse.json(res, { status: 500 });
     }
 
-    // 6a) Dual-write: re-mirror the now-paid order into MySQL so the account
-    // pages (which read orders from MySQL) reflect status=paid + payment meta
-    // + final totals. Supabase stays authoritative; this is best-effort and
-    // must never fail the payment.
-    try {
-      const { mirrorOrderIntoMysql } = await import("@/lib/data/orders");
-      await mirrorOrderIntoMysql(admin, order.id);
-      dbg.push({ step: "mysql.order.mirror", ok: true });
-    } catch (e: any) {
-      console.error("[dual-write] verify order MySQL mirror failed:", e);
-      dbg.push({ step: "mysql.order.mirror", ok: false, error: e?.message });
-    }
-
-    // 6b) Mirror the influencer attribution (commission ledger) into MySQL, so
-    // migrated influencer dashboards read correct earnings. After the order
-    // mirror above so the FK target exists. Best-effort.
-    if (influencerId) {
+    // 6a/6b) Dual-write: re-mirror the now-paid order (+ influencer
+    // attribution ledger) into MySQL so the account pages / influencer
+    // dashboards (which read from MySQL) reflect status=paid + final totals +
+    // earnings. Supabase stays authoritative in this branch; best-effort and
+    // must never fail the payment. Under MONEY_BACKEND=mysql these writes went
+    // straight to MySQL above, so the mirrors are skipped entirely.
+    if (!MONEY_MYSQL) {
       try {
-        const { mirrorOrderAttributionIntoMysql } = await import("@/lib/data/attribution");
-        await mirrorOrderAttributionIntoMysql(admin, order.id);
-        dbg.push({ step: "mysql.attribution.mirror", ok: true });
+        const { mirrorOrderIntoMysql } = await import("@/lib/data/orders");
+        await mirrorOrderIntoMysql(admin, order.id);
+        dbg.push({ step: "mysql.order.mirror", ok: true });
       } catch (e: any) {
-        console.error("[dual-write] verify attribution MySQL mirror failed:", e);
-        dbg.push({ step: "mysql.attribution.mirror", ok: false, error: e?.message });
+        console.error("[dual-write] verify order MySQL mirror failed:", e);
+        dbg.push({ step: "mysql.order.mirror", ok: false, error: e?.message });
+      }
+
+      if (influencerId) {
+        try {
+          const { mirrorOrderAttributionIntoMysql } = await import("@/lib/data/attribution");
+          await mirrorOrderAttributionIntoMysql(admin, order.id);
+          dbg.push({ step: "mysql.attribution.mirror", ok: true });
+        } catch (e: any) {
+          console.error("[dual-write] verify attribution MySQL mirror failed:", e);
+          dbg.push({ step: "mysql.attribution.mirror", ok: false, error: e?.message });
+        }
       }
     }
 
     // 7) Promo uses (best-effort)
     if (promoCodeId) {
-      const uses = await admin.rpc("increment_promo_use", {
-        p_promo_id: promoCodeId,
-      });
-      dbg.push({
-        step: "promo.uses",
-        error: uses.error?.message,
-        incremented: uses.data ?? null,
-      });
+      if (MONEY_MYSQL) {
+        // Port of increment_promo_use: bump `uses` only while the code is
+        // still active and under its max_uses guard (verify is idempotent —
+        // the paid-status gate above stops it running twice per order). When
+        // the increment hits max_uses we flip `active` off so the MySQL
+        // checkout resolver stops honoring an exhausted code.
+        try {
+          const { prisma } = await import("@/lib/db/prisma");
+          const promo = await prisma.promo_codes.findUnique({
+            where: { id: promoCodeId },
+            select: { uses: true, max_uses: true, active: true },
+          });
+          if (
+            promo &&
+            promo.active &&
+            (promo.max_uses == null || (promo.uses ?? 0) < promo.max_uses)
+          ) {
+            const newUses = (promo.uses ?? 0) + 1;
+            const exhausted =
+              promo.max_uses != null && newUses >= promo.max_uses;
+            await prisma.promo_codes.update({
+              where: { id: promoCodeId },
+              data: { uses: newUses, ...(exhausted ? { active: false } : {}) },
+            });
+            dbg.push({ step: "promo.uses", mysql: true, incremented: true, exhausted });
+          } else {
+            dbg.push({ step: "promo.uses", mysql: true, incremented: false });
+          }
+        } catch (e: any) {
+          dbg.push({ step: "promo.uses", mysql: true, error: e?.message });
+        }
+      } else {
+        const uses = await admin.rpc("increment_promo_use", {
+          p_promo_id: promoCodeId,
+        });
+        dbg.push({
+          step: "promo.uses",
+          error: uses.error?.message,
+          incremented: uses.data ?? null,
+        });
 
-      // Mirror the bumped uses (+ active flip on max_uses) into MySQL.
-      try {
-        const { mirrorPromoUsesIntoMysql } = await import("@/lib/data/attribution");
-        await mirrorPromoUsesIntoMysql(admin, promoCodeId);
-        dbg.push({ step: "mysql.promo.uses.mirror", ok: true });
-      } catch (e: any) {
-        console.error("[dual-write] verify promo-uses MySQL mirror failed:", e);
-        dbg.push({ step: "mysql.promo.uses.mirror", ok: false, error: e?.message });
+        // Mirror the bumped uses (+ active flip on max_uses) into MySQL.
+        try {
+          const { mirrorPromoUsesIntoMysql } = await import("@/lib/data/attribution");
+          await mirrorPromoUsesIntoMysql(admin, promoCodeId);
+          dbg.push({ step: "mysql.promo.uses.mirror", ok: true });
+        } catch (e: any) {
+          console.error("[dual-write] verify promo-uses MySQL mirror failed:", e);
+          dbg.push({ step: "mysql.promo.uses.mirror", ok: false, error: e?.message });
+        }
       }
     }
 
     // 8) Clear cart
     if (order.user_id) {
-      const cleared = await admin.rpc("cart_clear_for_user", {
-        p_user_id: order.user_id,
-      });
-      dbg.push({ step: "cart.clear", error: cleared.error?.message });
+      if (MONEY_MYSQL) {
+        // MySQL is authoritative — clearCartMysql IS the clear (not a mirror).
+        try {
+          const { clearCartMysql } = await import("@/lib/data/cart");
+          await clearCartMysql(order.user_id);
+          dbg.push({ step: "cart.clear", mysql: true });
+        } catch (e: any) {
+          dbg.push({ step: "cart.clear", mysql: true, error: e?.message });
+        }
+      } else {
+        const cleared = await admin.rpc("cart_clear_for_user", {
+          p_user_id: order.user_id,
+        });
+        dbg.push({ step: "cart.clear", error: cleared.error?.message });
 
-      // Mirror the clear into MySQL so the storefront cart (badge + cart
-      // page, which read MySQL) empties too. Best-effort.
-      try {
-        const { clearCartMysql } = await import("@/lib/data/cart");
-        await clearCartMysql(order.user_id);
-        dbg.push({ step: "mysql.cart.clear", ok: true });
-      } catch (e: any) {
-        console.error("[dual-write] verify cart clear MySQL mirror failed:", e);
-        dbg.push({ step: "mysql.cart.clear", ok: false, error: e?.message });
+        // Mirror the clear into MySQL so the storefront cart (badge + cart
+        // page, which read MySQL) empties too. Best-effort.
+        try {
+          const { clearCartMysql } = await import("@/lib/data/cart");
+          await clearCartMysql(order.user_id);
+          dbg.push({ step: "mysql.cart.clear", ok: true });
+        } catch (e: any) {
+          console.error("[dual-write] verify cart clear MySQL mirror failed:", e);
+          dbg.push({ step: "mysql.cart.clear", ok: false, error: e?.message });
+        }
       }
     }
 
@@ -752,10 +955,26 @@ export async function POST(req: NextRequest) {
       // so each row reads in the buyer's currency consistently with
       // the total at the bottom.
       const fxRate = Number(order.fx_rate_snapshot) || 1;
-      const { data: orderItemsRaw } = await admin
-        .from("order_items")
-        .select("name, sku, quantity, unit_price, line_total")
-        .eq("order_id", order.id);
+      let orderItemsRaw: any[] | null = null;
+      if (MONEY_MYSQL) {
+        const { prisma } = await import("@/lib/db/prisma");
+        orderItemsRaw = await prisma.order_items.findMany({
+          where: { order_id: order.id },
+          select: {
+            name: true,
+            sku: true,
+            quantity: true,
+            unit_price: true,
+            line_total: true,
+          },
+        });
+      } else {
+        const res = await admin
+          .from("order_items")
+          .select("name, sku, quantity, unit_price, line_total")
+          .eq("order_id", order.id);
+        orderItemsRaw = res.data;
+      }
       type OrderItem = {
         name: string | null;
         sku: string | null;
@@ -798,13 +1017,25 @@ export async function POST(req: NextRequest) {
 
       if (order.user_id) {
         // profile for full_name
-        const { data: profile } = await admin
-          .from("profiles")
-          .select("full_name")
-          .eq("id", order.user_id)
-          .maybeSingle();
+        let profile: any = null;
+        if (MONEY_MYSQL) {
+          const { prisma } = await import("@/lib/db/prisma");
+          profile = await prisma.profiles.findUnique({
+            where: { id: order.user_id },
+            select: { full_name: true },
+          });
+        } else {
+          const res = await admin
+            .from("profiles")
+            .select("full_name")
+            .eq("id", order.user_id)
+            .maybeSingle();
+          profile = res.data;
+        }
 
-        // auth user for email (correct admin API)
+        // auth user for email (correct admin API). Supabase Auth is NOT part of
+        // the MySQL money migration — the storefront still authenticates against
+        // Supabase — so this stays on the Supabase admin API in both branches.
         const { data: userData, error: userErr } =
           await admin.auth.admin.getUserById(order.user_id);
 
