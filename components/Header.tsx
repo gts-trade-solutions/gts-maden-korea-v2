@@ -14,7 +14,6 @@ import {
   Sparkles,
   Heart,
 } from "lucide-react";
-import { supabase } from "@/lib/supabaseClient";
 import { useCart } from "@/lib/contexts/CartContext";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { useCurrency } from "@/lib/contexts/CurrencyContext";
@@ -144,41 +143,29 @@ export function Header() {
     };
 
     const loadFromNetwork = async (): Promise<HeaderDictCache> => {
-      const [
-        { data: cats, error: cErr },
-        { data: brs, error: bErr },
-        { data: featured, error: fErr },
-      ] = await Promise.all([
-        supabase
-          .from("categories")
-          .select("slug,name,products(count)")
-          .eq("products.is_published", true)
-          .is("products.deleted_at", null)
-          .order("name", { ascending: true }),
-        supabase
-          .from("brands")
-          .select("slug,name,active,position,products(count)")
-          .eq("active", true)
-          .eq("products.is_published", true)
-          .is("products.deleted_at", null)
-          .order("position", { ascending: true })
-          .order("name", { ascending: true }),
-        supabase
-          .from("products")
-          .select(
-            "slug,name,price,currency,short_description,sale_price,sale_starts_at,sale_ends_at"
-          )
-          .eq("is_published", true)
-          .eq("is_featured", true)
-          .order("created_at", { ascending: false })
-          .limit(10),
-      ]);
+      // Nav dictionaries now come from MySQL via /api/catalog/nav. The route
+      // returns the same `products: [{ count }]` shape the old Supabase
+      // `products(count)` select did, so withCount() is unchanged.
+      let cats: any[] = [];
+      let brs: any[] = [];
+      let featured: FeaturedTickerItem[] = [];
+      try {
+        const res = await fetch("/api/catalog/nav", { cache: "no-store" });
+        if (res.ok) {
+          const json = await res.json();
+          cats = json.categories ?? [];
+          brs = json.brands ?? [];
+          featured = (json.featuredTicker ?? []) as FeaturedTickerItem[];
+        }
+      } catch {
+        // network/parse failure -> empty dictionaries (nav degrades gracefully)
+      }
 
       const built: HeaderDictCache = {
         ts: Date.now(),
-        categories: !cErr ? withCount(cats) : [],
-        brands: !bErr ? withCount(brs) : [],
-        featuredTicker: !fErr ? ((featured ?? []) as FeaturedTickerItem[]) : [],
+        categories: withCount(cats),
+        brands: withCount(brs),
+        featuredTicker: featured,
       };
       return built;
     };

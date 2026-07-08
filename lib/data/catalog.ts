@@ -103,6 +103,93 @@ export async function getEditorialProducts(
   return jsonSafe(shaped) as any[];
 }
 
+// ── Standalone product rails (bundles / shop@199 / best-seller) ───────────
+// Shared select + translation-attach so these landing surfaces return the same
+// shape as getEditorialProducts() (numbers/strings via jsonSafe, translations
+// under `product_translations`), letting the pages reuse mergeTranslations().
+const RAIL_SELECT = {
+  id: true, slug: true, name: true, price: true, currency: true,
+  compare_at_price: true, sale_price: true, sale_starts_at: true, sale_ends_at: true,
+  is_featured: true, is_trending: true, is_bundle: true, new_until: true,
+  short_description: true, volume_ml: true, net_weight_g: true, country_of_origin: true,
+  hero_image_path: true, stock_qty: true,
+  brands: { select: { name: true } },
+} as const;
+
+async function attachTranslations<T extends { id: string }>(products: T[]) {
+  const ids = products.map((p) => p.id);
+  const translations = ids.length
+    ? await prisma.product_translations.findMany({
+        where: { product_id: { in: ids } },
+        select: { product_id: true, locale: true, short_description: true, description: true },
+      })
+    : [];
+  const byId: Record<string, any[]> = {};
+  for (const tr of translations) {
+    (byId[tr.product_id] ??= []).push({
+      locale: tr.locale, short_description: tr.short_description, description: tr.description,
+    });
+  }
+  return products.map((p) => ({ ...p, product_translations: byId[p.id] ?? [] }));
+}
+
+// Bundles landing: every published product flagged is_bundle, newest first.
+export async function getBundleProductsMysql(limit = 48) {
+  const products = await prisma.products.findMany({
+    where: { is_published: true, deleted_at: null, is_bundle: true },
+    orderBy: { created_at: "desc" },
+    take: limit,
+    select: RAIL_SELECT,
+  });
+  return jsonSafe(await attachTranslations(products)) as any[];
+}
+
+// Shop@199: published products whose sale_price ≤ 199 and are inside their sale
+// window (start ≤ now ≤ end, either bound nullable), cheapest first.
+export async function getShop199ProductsMysql(now: Date, limit = 96) {
+  const products = await prisma.products.findMany({
+    where: {
+      is_published: true, deleted_at: null,
+      sale_price: { not: null, lte: 199 },
+      AND: [
+        { OR: [{ sale_starts_at: null }, { sale_starts_at: { lte: now } }] },
+        { OR: [{ sale_ends_at: null }, { sale_ends_at: { gte: now } }] },
+      ],
+    },
+    orderBy: { sale_price: "asc" },
+    take: limit,
+    select: RAIL_SELECT,
+  });
+  return jsonSafe(await attachTranslations(products)) as any[];
+}
+
+// Best-seller: all trending published products (newest first); if fewer than
+// `minTarget`, fill with other published products (featured first). Mirrors the
+// old client fallback logic. Returns { products, usedFallback }.
+export async function getBestSellerProductsMysql(minTarget = 8) {
+  const trending = await prisma.products.findMany({
+    where: { is_published: true, deleted_at: null, is_trending: true },
+    orderBy: { created_at: "desc" },
+    take: 100,
+    select: RAIL_SELECT,
+  });
+  let rows: any[] = trending;
+  let usedFallback = false;
+  if (trending.length < minTarget) {
+    const existing = new Set(trending.map((p) => p.id));
+    const fill = await prisma.products.findMany({
+      where: { is_published: true, deleted_at: null, is_trending: false },
+      orderBy: [{ is_featured: "desc" }, { created_at: "desc" }],
+      take: minTarget - trending.length,
+      select: RAIL_SELECT,
+    });
+    const fallback = fill.filter((p) => !existing.has(p.id));
+    usedFallback = fallback.length > 0;
+    rows = [...trending, ...fallback];
+  }
+  return { products: jsonSafe(await attachTranslations(rows)) as any[], usedFallback };
+}
+
 // MySQL equivalent of lib/pricing -> augmentProductsWithCountryOffers.
 // Reuses the pure effectivePriceForCountry() resolver; only the offer lookup
 // is re-pointed from Supabase to Prisma/MySQL.

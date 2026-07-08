@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
+import { useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
@@ -15,56 +14,21 @@ import type { StoryBlock } from "@/lib/types/productStory";
 type Props = {
   productId: string;
   /**
-   * When the parent has already fetched the blocks (e.g. from a server
-   * component), pass them here to skip the client-side roundtrip and
-   * any loading state. Empty array → section renders nothing.
+   * Discover blocks, fetched by the server component (PDP reads them from
+   * MySQL via getStoryBlocksMysql) and passed down. Undefined/empty → the
+   * section renders nothing. This component is purely prop-driven now; there
+   * is no client-side data fetch (Supabase removed).
    */
   initialBlocks?: StoryBlock[];
 };
 
-const SELECT_COLUMNS =
-  "id, product_id, position, block_type, size, mode, headline, body, text_position, text_color, text_bg, text_size, text_weight, caption_mode, caption_backdrop, split_direction, image_path, image_alt, image_focal_x, image_focal_y, image_fit, image_zoom, image_bg, caption, stats_items, before_image_path, after_image_path, comparison_caption, created_at, updated_at";
-
-export function ProductStorySection({ productId, initialBlocks }: Props) {
-  const [blocks, setBlocks] = useState<StoryBlock[] | null>(
-    initialBlocks ?? null
-  );
-  const [errored, setErrored] = useState(false);
+export function ProductStorySection({ initialBlocks }: Props) {
+  const blocks: StoryBlock[] = initialBlocks ?? [];
   const [openBlock, setOpenBlock] = useState<StoryBlock | null>(null);
 
-  useEffect(() => {
-    if (initialBlocks) return; // server gave us the data; do nothing
-    let cancelled = false;
-    if (!productId) {
-      setBlocks([]);
-      return;
-    }
-    (async () => {
-      const { data, error } = await supabase
-        .from("product_story_blocks")
-        .select(SELECT_COLUMNS)
-        .eq("product_id", productId)
-        .order("position", { ascending: true });
-
-      if (cancelled) return;
-      if (error) {
-        setErrored(true);
-        setBlocks([]);
-        return;
-      }
-      setBlocks((data ?? []) as StoryBlock[]);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [productId, initialBlocks]);
-
-  // Loading: render nothing. We don't yet know whether this product has
-  // any Discover content, and the vast majority of products have none —
-  // showing a skeleton would cause a layout flash on every product page.
-  if (blocks === null) return null;
-
-  if (errored || blocks.length === 0) return null;
+  // The vast majority of products have no Discover content; render nothing
+  // rather than a skeleton so there's no layout flash.
+  if (blocks.length === 0) return null;
 
   return (
     <>
