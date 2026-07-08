@@ -1,7 +1,8 @@
 // app/r/[code]/route.ts
 import { NextResponse } from "next/server";
 import { cookies, headers } from "next/headers";
-import { createClient } from "@/utils/supabase/server"; // from 2.3
+import { prisma } from "@/lib/db/prisma";
+import { getSessionUserId } from "@/lib/auth/session";
 
 // Was `runtime = "edge"`, but the referral-click log now writes directly to
 // MySQL via Prisma (replacing the old Supabase `log-referral-click` edge fn),
@@ -42,58 +43,72 @@ export async function GET(
     maxAge,
   });
 
-  // 2) Resolve redirect target (product slug / store)
-  //    Uses security-definer RPC from 2.1 (safe for anon)
-  const supabase = createClient();
-  const { data: userData } = await supabase.auth.getUser();
-  const viewerUserId = userData?.user?.id ?? null;
+  // 2) Identify the viewer via NextAuth (null for anonymous — that's fine).
+  const viewerUserId = await getSessionUserId();
 
-  const { data: target, error: targetErr } = await supabase.rpc(
-    "resolve_referral_target",
-    { p_code: code }
-  );
+  // 3) Resolve redirect target (product slug / store) from MySQL via Prisma.
+  //    Reproduces the old `resolve_referral_target` security-definer RPC: map
+  //    the referral `code` to its `referral_links` row and, for product links,
+  //    the linked product's slug. We also reuse this lookup for the click-log
+  //    insert below (link id). Best-effort: on any failure we fall through to a
+  //    safe home ("/") redirect.
+  let link:
+    | { id: string; link_type: string; product_slug: string | null }
+    | null = null;
+  try {
+    const row = await prisma.referral_links.findUnique({
+      where: { code },
+      select: {
+        id: true,
+        link_type: true,
+        products: { select: { slug: true } },
+      },
+    });
+    if (row) {
+      link = {
+        id: row.id,
+        link_type: row.link_type,
+        product_slug: row.products?.slug ?? null,
+      };
+    }
+  } catch {
+    /* resolution failure — safe fallback to home below */
+  }
 
-  // 3) Fire-and-forget click log — inlined via Prisma/MySQL (replaces the old
-  //    Supabase `log-referral-click` edge function). Resolve the referral code
-  //    to its link id, then insert a `referral_clicks` row capturing viewer,
-  //    IP, UA and referrer. Best-effort: wrapped in try/catch and intentionally
-  //    NOT awaited so it never blocks the redirect.
+  // 4) Fire-and-forget click log — inlined via Prisma/MySQL (replaces the old
+  //    Supabase `log-referral-click` edge function). Insert a `referral_clicks`
+  //    row capturing viewer, IP, UA and referrer for the resolved referral
+  //    link. Best-effort: wrapped in try/catch and intentionally NOT awaited so
+  //    it never blocks the redirect.
   (async () => {
     try {
-      const { prisma } = await import("@/lib/db/prisma");
-      const link = await prisma.referral_links.findUnique({
-        where: { code },
-        select: { id: true },
+      if (!link) return;
+      const h = headers();
+      const ip =
+        h.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+        h.get("x-real-ip") ||
+        h.get("cf-connecting-ip") ||
+        "";
+      const ua = h.get("user-agent") || "";
+      const referer = h.get("referer") || "";
+      await prisma.referral_clicks.create({
+        data: {
+          referral_id: link.id,
+          viewer_user_id: viewerUserId,
+          user_agent: ua || null,
+          ip_hash: ip || null,
+          meta: { referer },
+        },
       });
-      if (link) {
-        const h = headers();
-        const ip =
-          h.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-          h.get("x-real-ip") ||
-          h.get("cf-connecting-ip") ||
-          "";
-        const ua = h.get("user-agent") || "";
-        const referer = h.get("referer") || "";
-        await prisma.referral_clicks.create({
-          data: {
-            referral_id: link.id,
-            viewer_user_id: viewerUserId,
-            user_agent: ua || null,
-            ip_hash: ip || null,
-            meta: { referer },
-          },
-        });
-      }
     } catch {
       /* swallow logging errors — never block the redirect */
     }
   })();
 
-  // 4) Decide destination
-  const first = Array.isArray(target) ? target[0] : target;
+  // 5) Decide destination
   const to =
-    first?.link_type === "product"
-      ? productUrlFromSlug(first?.product_slug)
+    link?.link_type === "product"
+      ? productUrlFromSlug(link.product_slug)
       : "/"; // store-wide links land on home (adapt if needed)
 
   return NextResponse.redirect(new URL(to, req.url), {

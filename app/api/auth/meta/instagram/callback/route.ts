@@ -1,14 +1,14 @@
 // app/api/auth/meta/instagram/callback/route.ts
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { createRouteHandlerClient } from "@supabase/auth-helpers-nextjs";
+import { randomUUID } from "node:crypto";
+import { prisma } from "@/lib/db/prisma";
+import { getSessionUser } from "@/lib/auth/session";
+
+export const runtime = "nodejs";
 
 export async function GET(req: Request) {
-  const supabase = createRouteHandlerClient({ cookies });
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Identify the connecting user via NextAuth (replaces Supabase auth).
+  const user = await getSessionUser();
 
   // User must be logged into your app first
   if (!user) {
@@ -143,26 +143,39 @@ export async function GET(req: Request) {
 
     const username: string | null = igJson.username || null;
 
-    // 5) Save into instagram_accounts
-    const { error: upsertErr } = await supabase
-      .from("instagram_accounts")
-      .upsert(
-        {
+    // 5) Save into instagram_accounts (MySQL via Prisma). Upsert on the
+    //    composite unique key (owner_id, ig_business_account_id).
+    const tokenExpiresAt = expiresAt ? new Date(expiresAt) : null;
+    try {
+      await prisma.instagram_accounts.upsert({
+        where: {
+          owner_id_ig_business_account_id: {
+            owner_id: user.id,
+            ig_business_account_id: igBusinessId,
+          },
+        },
+        create: {
+          id: randomUUID(),
           owner_id: user.id,
           ig_business_account_id: igBusinessId,
           username,
           access_token: finalToken,
-          token_expires_at: expiresAt,
+          token_expires_at: tokenExpiresAt,
           is_active: true,
           facebook_page_id: chosenPage.id,
           page_access_token: chosenPage.access_token, // useful later for DMs
         },
-        {
-          onConflict: "owner_id, ig_business_account_id",
-        }
-      );
-
-    if (upsertErr) {
+        update: {
+          username,
+          access_token: finalToken,
+          token_expires_at: tokenExpiresAt,
+          is_active: true,
+          facebook_page_id: chosenPage.id,
+          page_access_token: chosenPage.access_token,
+          updated_at: new Date(),
+        },
+      });
+    } catch (upsertErr) {
       console.error("instagram_accounts upsert error:", upsertErr);
       throw new Error("Failed to save Instagram account in database");
     }

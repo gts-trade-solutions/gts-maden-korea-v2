@@ -18,7 +18,6 @@
 // migration in a separate, focused change.
 
 import { NextResponse } from "next/server";
-import { createMiddlewareClient } from "@supabase/auth-helpers-nextjs";
 import type { NextRequest } from "next/server";
 import { currencyForCountry, isSupportedCurrency } from "@/lib/currency";
 import { getCountryProfile, isSupportedCountry } from "@/lib/countries";
@@ -50,8 +49,6 @@ function detectCountry(req: NextRequest): string | null {
 }
 
 export async function middleware(req: NextRequest) {
-  const pathname = req.nextUrl.pathname;
-
   // ──────────────────────────────────────────────────────────────
   // Preference cookie auto-seed. Reads cheap headers, sets at most
   // three cookies the first time we see this visitor.
@@ -96,36 +93,11 @@ export async function middleware(req: NextRequest) {
     }
   }
 
-  // ──────────────────────────────────────────────────────────────
-  // Supabase session refresh — only on routes that rely on auth.
-  //
-  // Under AUTH_BACKEND=nextauth the storefront uses NextAuth (its JWT is
-  // validated per-request by the routes; no cookie refresh needed), so we only
-  // keep the Supabase refresh for the VENDOR app, which is still on Supabase
-  // Auth. The preference-cookie seeding above runs for everyone regardless.
-  // ──────────────────────────────────────────────────────────────
-  const isVendorProtected =
-    pathname.startsWith("/vendor") &&
-    pathname !== "/vendor/login" &&
-    pathname !== "/vendor/register";
-
-  const needsSessionRefresh =
-    process.env.AUTH_BACKEND === "nextauth"
-      ? isVendorProtected
-      : pathname.startsWith("/account") ||
-        pathname.startsWith("/admin") ||
-        pathname.startsWith("/checkout") ||
-        isVendorProtected ||
-        pathname.startsWith("/auth/callback");
-
-  if (!needsSessionRefresh) {
-    return response ?? NextResponse.next();
-  }
-
-  const res = response ?? NextResponse.next();
-  const supabase = createMiddlewareClient({ req, res });
-  await supabase.auth.getSession();
-  return res;
+  // Auth is validated per-request by NextAuth (AUTH_BACKEND=nextauth) and by
+  // the route-level guards (requireAdmin / getSessionUser), so the middleware
+  // no longer needs a Supabase session-cookie refresh. It only seeds the
+  // preference cookies above and passes the request through.
+  return response ?? NextResponse.next();
 }
 
 export const config = {
