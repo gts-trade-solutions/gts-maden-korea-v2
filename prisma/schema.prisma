@@ -2065,3 +2065,79 @@ model VerificationToken {
   @@unique([identifier, token])
   @@map("auth_verification_tokens")
 }
+
+// ── Skin Analyzer integration ──────────────────────────────────────────
+// MadeNKorea is the authority for identity + entitlement + canonical results.
+// The standalone analyzer (skinanalyzer.madenkorea.com) is the compute step and
+// posts results back here. See SKIN_ANALYZER_INTEGRATION.md.
+// user_id is the NextAuth user id — kept as a plain indexed column, NOT a hard
+// FK, to avoid touching the large user table.
+
+model SkinAnalysis {
+  id                 String              @id @default(uuid()) @db.Char(36)
+  userId             String              @map("user_id") @db.Char(36)
+  // Idempotency key = the analyzer's own analysis id. Unique so a retried
+  // post-back can never create a duplicate.
+  analyzerAnalysisId String?             @unique @map("analyzer_analysis_id") @db.VarChar(64)
+  // The entitlement row that authorized this analysis (the token grant_id).
+  grantId            String              @map("grant_id") @db.Char(36)
+  status             String              @default("pending") @db.VarChar(16) // pending | done | failed
+  kind               String              @default("face") @db.VarChar(16) // face | hair (future)
+  summary            Json? // headline result for list + detail views
+  error              String?             @db.Text
+  createdAt          DateTime            @default(now()) @map("created_at") @db.DateTime(6)
+  completedAt        DateTime?           @map("completed_at") @db.DateTime(6)
+  issues             SkinAnalysisIssue[]
+
+  @@index([userId, createdAt])
+  @@index([grantId])
+  @@map("skin_analyses")
+}
+
+model SkinAnalysisIssue {
+  id           String       @id @default(uuid()) @db.Char(36)
+  analysisId   String       @map("analysis_id") @db.Char(36)
+  issueType    String       @map("issue_type") @db.VarChar(64) // acne | dark_circle | wrinkle | ...
+  score        Float?
+  confidence   Float?
+  severityBand String?      @map("severity_band") @db.VarChar(16) // clear | mild | moderate | severe
+  details      Json?
+  analysis     SkinAnalysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+
+  @@index([analysisId])
+  @@map("skin_analysis_issues")
+}
+
+// One row per granted analysis. The row id IS the token grant_id. Lifecycle:
+// available -> reserved (Start) -> consumed (successful callback)
+//                     \-> released (failure / TTL expiry; free scan preserved)
+model SkinEntitlement {
+  id         String    @id @default(uuid()) @db.Char(36)
+  userId     String    @map("user_id") @db.Char(36)
+  state      String    @default("available") @db.VarChar(16) // available | reserved | consumed | released
+  source     String    @default("free") @db.VarChar(16) // free | granted
+  analysisId String?   @map("analysis_id") @db.Char(36) // set when consumed
+  reservedAt DateTime? @map("reserved_at") @db.DateTime(6)
+  expiresAt  DateTime? @map("expires_at") @db.DateTime(6) // reservation TTL
+  consumedAt DateTime? @map("consumed_at") @db.DateTime(6)
+  releasedAt DateTime? @map("released_at") @db.DateTime(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.DateTime(6)
+  updatedAt  DateTime  @default(now()) @updatedAt @map("updated_at") @db.DateTime(6)
+
+  @@index([userId, state])
+  @@map("skin_entitlements")
+}
+
+model SkinAccessRequest {
+  id         String    @id @default(uuid()) @db.Char(36)
+  userId     String    @map("user_id") @db.Char(36)
+  status     String    @default("pending") @db.VarChar(16) // pending | approved | denied
+  note       String?   @db.Text
+  reviewedBy String?   @map("reviewed_by") @db.Char(36)
+  reviewedAt DateTime? @map("reviewed_at") @db.DateTime(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.DateTime(6)
+
+  @@index([userId, status])
+  @@index([status, createdAt])
+  @@map("skin_access_requests")
+}
