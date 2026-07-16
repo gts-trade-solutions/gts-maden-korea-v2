@@ -16,6 +16,7 @@ import {
   bandStyle,
   META_KEYS,
   type SkinSummary,
+  type SkinIssueDetails,
 } from "@/lib/integrations/skinConcerns";
 
 export const runtime = "nodejs";
@@ -66,6 +67,20 @@ export default async function SkinAnalysisDetailPage({
           </Button>
         </div>
 
+        {/* Analyzed photo */}
+        {summary.base_image && (
+          <Card className="mb-4">
+            <CardContent className="p-3">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={summary.base_image}
+                alt="Analyzed photo"
+                className="mx-auto max-h-96 w-auto rounded-lg"
+              />
+            </CardContent>
+          </Card>
+        )}
+
         {(summary.overall != null ||
           summary.skin_type ||
           summary.skin_age) && (
@@ -105,16 +120,27 @@ export default async function SkinAnalysisDetailPage({
             )}
             {concerns.map((c) => {
               const band = bandStyle(c.severityBand);
+              const details = (c.details as SkinIssueDetails | null) ?? {};
               return (
                 <div
                   key={c.id}
-                  className="flex items-center justify-between py-3"
+                  className="flex items-center justify-between gap-3 py-3"
                 >
-                  <span className="text-sm font-medium">
-                    {concernLabel(c.issueType)}
-                  </span>
+                  <div className="flex items-center gap-3">
+                    {details.imageUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={details.imageUrl}
+                        alt={concernLabel(c.issueType)}
+                        className="h-12 w-12 shrink-0 rounded-md object-cover"
+                      />
+                    ) : null}
+                    <span className="text-sm font-medium">
+                      {concernLabel(c.issueType)}
+                    </span>
+                  </div>
                   <span
-                    className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${band.className}`}
+                    className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium ${band.className}`}
                   >
                     {band.label}
                   </span>

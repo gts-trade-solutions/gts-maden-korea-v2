@@ -33,6 +33,7 @@ import {
   Languages,
   Mail,
   ShieldCheck,
+  Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -327,6 +328,30 @@ export default function AdminDashboard() {
                 onClick={() => router.push("/admin/influencers")}
               >
                 Manage Influencers
+              </Button>
+            </CardContent>
+          </Card>
+
+          {/* Skin Analysis */}
+          <Card className="hover:shadow-lg transition-shadow">
+            <CardHeader>
+              <Sparkles className="h-8 w-8 mb-2 text-primary" />
+              <CardTitle>Skin Analysis</CardTitle>
+              <CardDescription>
+                Review analysis access requests
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-muted-foreground mb-4">
+                Approve or deny users who have used their free skin analysis and
+                requested another one.
+              </p>
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => router.push("/admin/skin-analysis/requests")}
+              >
+                Manage Skin Analysis
               </Button>
             </CardContent>
           </Card>

@@ -57,4 +57,11 @@ export type SkinSummary = {
   skin_type?: string | null;
   skin_age?: string | null;
   top_concerns?: string[];
+  base_image?: string | null; // durable proxy URL to the analyzed photo
+};
+
+// Per-issue details JSON stored from the analyzer callback.
+export type SkinIssueDetails = {
+  type?: string;
+  imageUrl?: string | null; // durable proxy URL to this concern's overlay image
 };
