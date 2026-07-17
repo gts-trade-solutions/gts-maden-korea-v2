@@ -10,7 +10,11 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { concernLabel, type SkinSummary } from "@/lib/integrations/skinConcerns";
+import {
+  concernLabel,
+  scoreRating,
+  type SkinSummary,
+} from "@/lib/integrations/skinConcerns";
 import { Sparkles, ChevronRight } from "lucide-react";
 
 export const runtime = "nodejs";
@@ -34,9 +38,16 @@ export default async function SkinAnalysisHistoryPage() {
           <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
             Skin analyses
           </h1>
-          <Button asChild size="sm">
-            <Link href="/skin-analyzer">New analysis</Link>
-          </Button>
+          <div className="flex gap-2">
+            {analyses.length >= 2 ? (
+              <Button asChild size="sm" variant="outline">
+                <Link href="/account/skin-analysis/compare">Compare</Link>
+              </Button>
+            ) : null}
+            <Button asChild size="sm">
+              <Link href="/skin-analyzer">New analysis</Link>
+            </Button>
+          </div>
         </div>
 
         {analyses.length === 0 ? (
@@ -77,7 +88,16 @@ export default async function SkinAnalysisHistoryPage() {
                           {top || "View result"}
                         </p>
                       </div>
-                      <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                      <div className="flex items-center gap-3">
+                        {summary.overall != null ? (
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums ${scoreRating(summary.overall).chipClass}`}
+                          >
+                            {Math.round(summary.overall * 100)}
+                          </span>
+                        ) : null}
+                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                      </div>
                     </CardHeader>
                   </Card>
                 </Link>

@@ -3,28 +3,23 @@ import Link from "next/link";
 import { getSessionUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db/prisma";
 import { CustomerLayout } from "@/components/CustomerLayout";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { SkinResultView } from "@/components/skin/SkinResultView";
 import {
-  concernLabel,
-  bandStyle,
   META_KEYS,
+  DEFAULT_RECO_THRESHOLD,
   type SkinSummary,
   type SkinIssueDetails,
 } from "@/lib/integrations/skinConcerns";
+import { generateSkinSummary } from "@/lib/integrations/skinSummary";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Canonical result view. By the time the analyzer redirects here, the signed
-// callback has already stored the row (it returns this id), so a direct read is
-// correct — no polling needed in the happy path.
+const num = (v: unknown): number | null => (v == null ? null : Number(v));
+const iso = (d: Date | null | undefined): string | null =>
+  d ? new Date(d).toISOString() : null;
+
 export default async function SkinAnalysisDetailPage({
   params,
 }: {
@@ -42,14 +37,118 @@ export default async function SkinAnalysisDetailPage({
   if (!analysis) notFound();
 
   const summary = (analysis.summary as SkinSummary | null) ?? {};
+
+  const prev = await prisma.skinAnalysis.findFirst({
+    where: {
+      userId: user.id,
+      status: "done",
+      createdAt: { lt: analysis.createdAt },
+    },
+    orderBy: { createdAt: "desc" },
+    select: { id: true },
+  });
+
+  // Scored concerns, worst (lowest health) first.
   const concerns = analysis.issues
-    .filter((i) => !META_KEYS.has(i.issueType))
+    .filter((i) => !META_KEYS.has(i.issueType) && i.score != null)
     .sort((a, b) => (a.score ?? 1) - (b.score ?? 1));
+
+  const viewConcerns = concerns.map((c) => ({
+    key: c.issueType,
+    score: c.score ?? 0,
+    imageUrl: (c.details as SkinIssueDetails | null)?.imageUrl ?? null,
+  }));
+
+  // ── Recommendations: concerns below their (admin) threshold ──
+  const concernTypes = concerns.map((c) => c.issueType);
+  const settings = concernTypes.length
+    ? await prisma.skinConcernSetting.findMany({
+        where: { concernType: { in: concernTypes } },
+      })
+    : [];
+  const settingMap = new Map(settings.map((s) => [s.concernType, s]));
+
+  const below = concerns.filter((c) => {
+    const s = settingMap.get(c.issueType);
+    if (s && !s.enabled) return false;
+    const threshold = s?.threshold ?? DEFAULT_RECO_THRESHOLD;
+    return (c.score ?? 1) < threshold;
+  });
+
+  const recos = new Map<string, any[]>();
+  if (below.length) {
+    const maps = await prisma.skinConcernProduct.findMany({
+      where: { concernType: { in: below.map((c) => c.issueType) } },
+      orderBy: [{ concernType: "asc" }, { position: "asc" }],
+    });
+    const productIds = Array.from(new Set(maps.map((m) => m.productId)));
+    const products = productIds.length
+      ? await prisma.products.findMany({
+          where: { id: { in: productIds }, is_published: true, deleted_at: null },
+          select: {
+            id: true,
+            slug: true,
+            name: true,
+            hero_image_path: true,
+            price: true,
+            sale_price: true,
+            compare_at_price: true,
+            sale_starts_at: true,
+            sale_ends_at: true,
+          },
+        })
+      : [];
+    const pMap = new Map(products.map((p) => [p.id, p]));
+    for (const c of below) {
+      const items = maps
+        .filter((m) => m.concernType === c.issueType)
+        .map((m) => pMap.get(m.productId))
+        .filter(Boolean)
+        .map((p: any) => ({
+          id: p.id,
+          slug: p.slug,
+          name: p.name,
+          hero_image_path: p.hero_image_path ?? null,
+          price: num(p.price),
+          sale_price: num(p.sale_price),
+          compare_at_price: num(p.compare_at_price),
+          sale_starts_at: iso(p.sale_starts_at),
+          sale_ends_at: iso(p.sale_ends_at),
+        }));
+      if (items.length) recos.set(c.issueType, items);
+    }
+  }
+
+  const recommendations: Record<string, any[]> = Object.fromEntries(recos);
+
+  // AI summary — lazily generated once, then cached on the analysis row.
+  let aiSummary = summary.ai_summary ?? null;
+  if (!aiSummary && concerns.length) {
+    const generated = await generateSkinSummary({
+      overall: summary.overall ?? null,
+      skinType: summary.skin_type ?? null,
+      skinAge: summary.skin_age ?? null,
+      concerns: viewConcerns.map((c) => ({ key: c.key, score: c.score })),
+      treatmentKeys: Object.keys(recommendations),
+    });
+    if (generated) {
+      aiSummary = generated;
+      await prisma.skinAnalysis
+        .update({
+          where: { id: analysis.id },
+          data: { summary: { ...summary, ai_summary: generated } as any },
+        })
+        .catch(() => {});
+    }
+  }
 
   return (
     <CustomerLayout>
-      <div className="mx-auto max-w-2xl px-4 py-8">
-        <div className="mb-6 flex items-center justify-between">
+      <div
+        className="mx-auto max-w-6xl px-4 py-6"
+        style={{ ["--hdr" as string]: "128px" } as React.CSSProperties}
+      >
+        <div className="mb-4 flex items-center justify-between gap-3">
           <div>
             <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
               Your skin analysis
@@ -62,113 +161,36 @@ export default async function SkinAnalysisDetailPage({
               })}
             </p>
           </div>
-          <Button asChild variant="outline" size="sm">
-            <Link href="/account/skin-analysis">All results</Link>
-          </Button>
+          <div className="flex shrink-0 gap-2">
+            {prev ? (
+              <Button asChild variant="outline" size="sm">
+                <Link
+                  href={`/account/skin-analysis/compare?a=${prev.id}&b=${analysis.id}`}
+                >
+                  Compare
+                </Link>
+              </Button>
+            ) : null}
+            <Button asChild variant="outline" size="sm">
+              <Link href="/account/skin-analysis">All</Link>
+            </Button>
+          </div>
         </div>
 
-        {/* Analyzed photo */}
-        {summary.base_image && (
-          <Card className="mb-4">
-            <CardContent className="p-3">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={summary.base_image}
-                alt="Analyzed photo"
-                className="mx-auto max-h-96 w-auto rounded-lg"
-              />
-            </CardContent>
-          </Card>
-        )}
+        <SkinResultView
+          baseImage={summary.base_image ?? null}
+          overall={summary.overall ?? null}
+          skinType={summary.skin_type ?? null}
+          skinAge={summary.skin_age ?? null}
+          concerns={viewConcerns}
+          recommendations={recommendations}
+          aiSummary={aiSummary}
+        />
 
-        {(summary.overall != null ||
-          summary.skin_type ||
-          summary.skin_age) && (
-          <Card className="mb-4">
-            <CardHeader>
-              <CardTitle className="text-base">Summary</CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-wrap gap-6">
-              {summary.overall != null && (
-                <Stat
-                  label="Overall"
-                  value={`${Math.round(summary.overall * 100)}/100`}
-                />
-              )}
-              {summary.skin_type && (
-                <Stat label="Skin type" value={cap(summary.skin_type)} />
-              )}
-              {summary.skin_age && (
-                <Stat label="Skin age" value={String(summary.skin_age)} />
-              )}
-            </CardContent>
-          </Card>
-        )}
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Concerns</CardTitle>
-            <CardDescription>
-              Cosmetic guidance only — not a medical diagnosis.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="divide-y">
-            {concerns.length === 0 && (
-              <p className="py-4 text-sm text-muted-foreground">
-                No specific concerns were detected.
-              </p>
-            )}
-            {concerns.map((c) => {
-              const band = bandStyle(c.severityBand);
-              const details = (c.details as SkinIssueDetails | null) ?? {};
-              return (
-                <div
-                  key={c.id}
-                  className="flex items-center justify-between gap-3 py-3"
-                >
-                  <div className="flex items-center gap-3">
-                    {details.imageUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={details.imageUrl}
-                        alt={concernLabel(c.issueType)}
-                        className="h-12 w-12 shrink-0 rounded-md object-cover"
-                      />
-                    ) : null}
-                    <span className="text-sm font-medium">
-                      {concernLabel(c.issueType)}
-                    </span>
-                  </div>
-                  <span
-                    className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium ${band.className}`}
-                  >
-                    {band.label}
-                  </span>
-                </div>
-              );
-            })}
-          </CardContent>
-        </Card>
-
-        <p className="mt-6 text-center text-xs text-muted-foreground">
+        <p className="mt-8 text-center text-xs text-muted-foreground">
           For cosmetic guidance only. Not a medical diagnosis.
         </p>
       </div>
     </CustomerLayout>
   );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <p className="text-xs uppercase tracking-wide text-muted-foreground">
-        {label}
-      </p>
-      <p className="text-lg font-semibold">{value}</p>
-    </div>
-  );
-}
-
-function cap(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
 }

@@ -341,17 +341,24 @@ export default function AdminDashboard() {
                 Review analysis access requests
               </CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-2">
               <p className="text-sm text-muted-foreground mb-4">
-                Approve or deny users who have used their free skin analysis and
-                requested another one.
+                Review access requests, and map products to skin concerns for
+                the results page recommendations.
               </p>
               <Button
                 variant="outline"
                 className="w-full"
                 onClick={() => router.push("/admin/skin-analysis/requests")}
               >
-                Manage Skin Analysis
+                Access requests
+              </Button>
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => router.push("/admin/skin-analysis/recommendations")}
+              >
+                Product recommendations
               </Button>
             </CardContent>
           </Card>

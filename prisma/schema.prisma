@@ -2141,3 +2141,27 @@ model SkinAccessRequest {
   @@index([status, createdAt])
   @@map("skin_access_requests")
 }
+
+// Admin-managed product recommendations for skin concerns.
+// A concern recommends its mapped products when a user's health score for that
+// concern falls BELOW `threshold` (0-1; higher score = healthier).
+model SkinConcernSetting {
+  concernType String   @id @map("concern_type") @db.VarChar(64)
+  threshold   Float    @default(0.6) // recommend when score < threshold
+  enabled     Boolean  @default(true)
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.DateTime(6)
+
+  @@map("skin_concern_settings")
+}
+
+model SkinConcernProduct {
+  id          String   @id @default(uuid()) @db.Char(36)
+  concernType String   @map("concern_type") @db.VarChar(64)
+  productId   String   @map("product_id") @db.Char(36) // references products.id (loose)
+  position    Int      @default(0)
+  createdAt   DateTime @default(now()) @map("created_at") @db.DateTime(6)
+
+  @@unique([concernType, productId], map: "skin_concern_products_unique")
+  @@index([concernType, position])
+  @@map("skin_concern_products")
+}

@@ -13,7 +13,15 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { useAuth } from "@/lib/contexts/AuthContext";
-import { ShoppingBag, Heart, User, LogOut, Eye, ShieldCheck } from "lucide-react";
+import {
+  ShoppingBag,
+  Heart,
+  User,
+  LogOut,
+  Eye,
+  ShieldCheck,
+  Sparkles,
+} from "lucide-react";
 import { toast } from "sonner";
 import { ProductCard } from "@/components/ProductCard";
 import { resolveMediaUrl } from "@/lib/storage/backend";
@@ -164,6 +172,24 @@ export default function AccountPage() {
                 onClick={() => router.push("/wishlist")}
               >
                 {t("viewWishlistBtn")}
+              </Button>
+            </CardContent>
+          </Card>
+<Card className="hover:shadow-lg transition-shadow cursor-pointer">
+            <CardHeader>
+              <Sparkles className="h-8 w-8 mb-2 text-primary" />
+              <CardTitle>Skin Analysis</CardTitle>
+              <CardDescription>
+                Your AI skin analyses, results, and progress over time
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => router.push("/account/skin-analysis")}
+              >
+                View results
               </Button>
             </CardContent>
           </Card>
