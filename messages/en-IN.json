@@ -281,7 +281,7 @@
     "badgeLowStock": "Low stock",
     "discountBadge": "{pct}% OFF",
     "saveLabel": "Save {amount} ({pct}% OFF)",
-    "badgeBackorder": "Ships in 2–3 weeks"
+    "badgeBackorder": "Arrives in 2–3 weeks"
   },
   "cookieConsent": {
     "ariaLabel": "Cookie consent",
