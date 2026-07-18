@@ -194,7 +194,7 @@ export function ProductCard({ product, hideBadges = false }: ProductCardProps) {
 
   const onAddToCart = async (e: React.MouseEvent) => {
     e.preventDefault();
-    if (isOut || isAddingToCart) return;
+    if (isAddingToCart) return;
     try {
       setIsAddingToCart(true);
       await addItem(product.id, 1);
@@ -211,7 +211,7 @@ export function ProductCard({ product, hideBadges = false }: ProductCardProps) {
 
   const onBuyNow = async (e: React.MouseEvent) => {
     e.preventDefault();
-    if (isOut || isBuyingNow) return;
+    if (isBuyingNow) return;
 
     // Single Buy Now path for all visitors. /checkout calls
     // /api/razorpay/create which handles INR and all supported
@@ -297,7 +297,7 @@ export function ProductCard({ product, hideBadges = false }: ProductCardProps) {
                     variant="secondary"
                     className="px-1.5 py-0 text-[10px] sm:px-2.5 sm:py-0.5 sm:text-xs"
                   >
-                    {t("badgeOutOfStock")}
+                    {t("badgeBackorder")}
                   </Badge>
                 )}
                 {!isOut && isLow && (
@@ -352,7 +352,7 @@ export function ProductCard({ product, hideBadges = false }: ProductCardProps) {
             <Button
               size="icon"
               onClick={onAddToCart}
-              disabled={!!isOut || isAddingToCart}
+              disabled={isAddingToCart}
               aria-label={t("addToCart")}
             >
               {justAdded ? (
@@ -449,7 +449,7 @@ export function ProductCard({ product, hideBadges = false }: ProductCardProps) {
                 e.preventDefault();
                 onBuyNow(e);
               }}
-              disabled={!!isOut || isBuyingNow}
+              disabled={isBuyingNow}
             >
               {isBuyingNow ? (
                 t("processing")

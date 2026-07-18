@@ -280,7 +280,8 @@
     "badgeOutOfStock": "สินค้าหมด",
     "badgeLowStock": "สินค้าเหลือน้อย",
     "discountBadge": "ลด {pct}%",
-    "saveLabel": "ประหยัด {amount} ({pct}% OFF)"
+    "saveLabel": "ประหยัด {amount} ({pct}% OFF)",
+    "badgeBackorder": "จัดส่งใน 2–3 สัปดาห์"
   },
   "cookieConsent": {
     "ariaLabel": "ความยินยอมการใช้คุกกี้",
@@ -879,7 +880,8 @@
     "productImageFallback": "ภาพสินค้า",
     "productImageAlt": "ภาพสินค้า",
     "prevImage": "ภาพก่อนหน้า",
-    "nextImage": "ภาพถัดไป"
+    "nextImage": "ภาพถัดไป",
+    "backorderNote": "จัดส่งโดยประมาณ: 2–3 สัปดาห์"
   },
   "checkoutPage": {
     "title": "ชำระเงิน",

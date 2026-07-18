@@ -776,6 +776,9 @@ export default function ProductPage({
 
   const inWishlist = product ? isInWishlist(product.id) : false;
   const [isAddingToCart, setIsAddingToCart] = useState(false);
+  // Zero stock no longer blocks purchase — out-of-stock products sell on
+  // backorder with a 2–3 week delivery note (calc-totals allows them too).
+  // This flag now only drives that note.
   const isOutOfStock = (product?.stock_qty ?? 0) <= 0;
 
   // Upper bound for the quantity selector: cap at stock_qty. Falls back
@@ -818,7 +821,7 @@ export default function ProductPage({
   const displayedQty = inCart ? cartQty : 0;
 
   const handleAddToCart = async () => {
-    if (!product || isAddingToCart || isOutOfStock) return;
+    if (!product || isAddingToCart) return;
     // Once the item is already in the cart, the +/- buttons drive the
     // cart line directly. Tapping "Added to cart" jumps to /cart so
     // the user can review or proceed instead of stacking duplicates.
@@ -843,7 +846,7 @@ export default function ProductPage({
   };
 
   const handleBuyNow = async () => {
-    if (!product || isBuyingNow || isOutOfStock) return;
+    if (!product || isBuyingNow) return;
 
     // Single Buy Now path for all visitors. /checkout calls
     // /api/razorpay/create which handles INR and the supported
@@ -1725,7 +1728,7 @@ export default function ProductPage({
                           void setCartQty(cartLine.id, cartQty - 1);
                         }
                       }}
-                      disabled={!inCart || isOutOfStock}
+                      disabled={!inCart}
                       aria-label={
                         cartQty === 1
                           ? t("removeFromCart")
@@ -1742,7 +1745,7 @@ export default function ProductPage({
                       size="icon"
                       className="h-11 w-11 rounded-none"
                       onClick={() => {
-                        if (!product || isOutOfStock) return;
+                        if (!product) return;
                         if (cartLine) {
                           if (cartQty < maxQty) {
                             void setCartQty(cartLine.id, cartQty + 1);
@@ -1751,10 +1754,7 @@ export default function ProductPage({
                           void addItem(product.id, 1);
                         }
                       }}
-                      disabled={
-                        isOutOfStock ||
-                        (inCart && cartQty >= maxQty)
-                      }
+                      disabled={inCart && cartQty >= maxQty}
                       aria-label={
                         inCart ? t("increaseQty") : t("addToCart")
                       }
@@ -1777,16 +1777,14 @@ export default function ProductPage({
                           : ""
                       }`}
                       onClick={handleAddToCart}
-                      disabled={isAddingToCart || isOutOfStock}
+                      disabled={isAddingToCart}
                     >
                       {inCart ? (
                         <Check className="mr-2 h-5 w-5" />
                       ) : (
                         <ShoppingCart className="mr-2 h-5 w-5" />
                       )}
-                      {isOutOfStock
-                        ? t("outOfStock")
-                        : isAddingToCart
+                      {isAddingToCart
                         ? t("addingToCart")
                         : inCart
                         ? t("addedToCart")
@@ -1797,11 +1795,9 @@ export default function ProductPage({
                       variant="outline"
                       className="w-full"
                       onClick={handleBuyNow}
-                      disabled={isBuyingNow || isOutOfStock}
+                      disabled={isBuyingNow}
                     >
-                      {isOutOfStock
-                        ? t("outOfStock")
-                        : isBuyingNow
+                      {isBuyingNow
                         ? t("buyNowProcessing")
                         : t("buyNow")}
                     </Button>
@@ -1820,6 +1816,15 @@ export default function ProductPage({
                     />
                   </Button>
                 </div>
+
+                {/* Backorder delivery note — only for zero-stock products.
+                    They stay purchasable; this sets the delivery expectation. */}
+                {isOutOfStock && (
+                  <p className="flex items-center gap-2 text-sm text-amber-700">
+                    <Truck className="h-4 w-4 shrink-0" />
+                    {t("backorderNote")}
+                  </p>
+                )}
 
                 {/* Share + shipping highlights */}
                 <div className="flex items-center gap-4 pt-6 border-t">

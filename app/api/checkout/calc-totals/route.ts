@@ -93,12 +93,9 @@ const lines: LineInput[] = Array.isArray(body?.lines) ? body.lines : [];
         { status: 400 }
       );
     }
-    if (Number(p.stock_qty ?? 0) <= 0) {
-      return NextResponse.json(
-        { ok: false, error: "OUT_OF_STOCK_ITEM", product_id: p.id },
-        { status: 400 }
-      );
-    }
+    // Zero-stock items are intentionally allowed through: out-of-stock
+    // products are sold on backorder (storefront shows a 2–3 week delivery
+    // note instead of blocking the purchase).
     if (p.currency && p.currency !== "INR") {
       return NextResponse.json(
         { ok: false, error: "NON_INR_PRODUCT_PRICE", product_id: p.id },

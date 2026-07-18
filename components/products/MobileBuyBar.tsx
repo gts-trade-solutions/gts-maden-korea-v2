@@ -55,33 +55,14 @@ export function MobileBuyBar({
       role="region"
       aria-label={t("productActionsAria")}
     >
-      {isOutOfStock ? (
-        // Single muted pill replaces the action row when stock is 0.
-        // Heart still renders so customers can wishlist for restock.
-        <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            onClick={onWishlistToggle}
-            aria-label={inWishlist ? t("removeFromWishlist") : t("addToWishlist")}
-            className="shrink-0 h-11 w-11 rounded-full"
-          >
-            <Heart
-              className={cn(
-                "h-5 w-5 transition-colors",
-                inWishlist && "fill-red-500 text-red-500"
-              )}
-            />
-          </Button>
-          <div
-            className="flex-1 inline-flex items-center justify-center h-11 rounded-full border bg-muted text-sm font-medium text-muted-foreground"
-            aria-disabled
-          >
-            {t("outOfStock")}
-          </div>
-        </div>
-      ) : (
+      {/* Zero-stock products stay purchasable (backorder) — the actions render
+          as normal and a slim delivery-expectation note sits above them. */}
+      {isOutOfStock && (
+        <p className="mb-2 text-center text-xs font-medium text-amber-700">
+          {t("backorderNote")}
+        </p>
+      )}
+      {(
         <div className="flex items-center gap-2">
           <Button
             type="button"

@@ -280,7 +280,8 @@
     "badgeOutOfStock": "Hết hàng",
     "badgeLowStock": "Số lượng ít",
     "discountBadge": "GIẢM {pct}%",
-    "saveLabel": "Tiết kiệm {amount} (GIẢM {pct}%)"
+    "saveLabel": "Tiết kiệm {amount} (GIẢM {pct}%)",
+    "badgeBackorder": "Giao hàng trong 2–3 tuần"
   },
   "cookieConsent": {
     "ariaLabel": "Đồng ý cookie",
@@ -879,7 +880,8 @@
     "productImageFallback": "Ảnh sản phẩm",
     "productImageAlt": "Ảnh sản phẩm",
     "prevImage": "Ảnh trước",
-    "nextImage": "Ảnh tiếp theo"
+    "nextImage": "Ảnh tiếp theo",
+    "backorderNote": "Dự kiến giao hàng: 2–3 tuần"
   },
   "checkoutPage": {
     "title": "Thanh toán",

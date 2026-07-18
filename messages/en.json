@@ -280,7 +280,8 @@
     "badgeOutOfStock": "Out of stock",
     "badgeLowStock": "Low stock",
     "discountBadge": "{pct}% OFF",
-    "saveLabel": "Save {amount} ({pct}% OFF)"
+    "saveLabel": "Save {amount} ({pct}% OFF)",
+    "badgeBackorder": "Ships in 2–3 weeks"
   },
   "cookieConsent": {
     "ariaLabel": "Cookie consent",
@@ -881,7 +882,8 @@
     "productImageFallback": "Product Image",
     "productImageAlt": "Product image",
     "prevImage": "Previous image",
-    "nextImage": "Next image"
+    "nextImage": "Next image",
+    "backorderNote": "Estimated delivery: 2–3 weeks"
   },
   "checkoutPage": {
     "title": "Checkout",

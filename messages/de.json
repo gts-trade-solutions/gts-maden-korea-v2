@@ -280,7 +280,8 @@
     "badgeOutOfStock": "Ausverkauft",
     "badgeLowStock": "Niedriger Bestand",
     "discountBadge": "{pct}% RABATT",
-    "saveLabel": "Sparen Sie {amount} ({pct}% RABATT)"
+    "saveLabel": "Sparen Sie {amount} ({pct}% RABATT)",
+    "badgeBackorder": "Versand in 2–3 Wochen"
   },
   "cookieConsent": {
     "ariaLabel": "Cookie-Zustimmung",
@@ -879,7 +880,8 @@
     "productImageFallback": "Produktbild",
     "productImageAlt": "Produktbild",
     "prevImage": "Vorheriges Bild",
-    "nextImage": "Nächstes Bild"
+    "nextImage": "Nächstes Bild",
+    "backorderNote": "Voraussichtliche Lieferung: 2–3 Wochen"
   },
   "checkoutPage": {
     "title": "Kasse",
