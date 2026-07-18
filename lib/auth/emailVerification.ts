@@ -196,6 +196,12 @@ export async function getEmailVerificationStatus(
  * Hard gate used inside trust-required APIs (checkout, reviews,
  * K-Partnership, etc.). Returns null if the user may proceed, otherwise
  * an object describing the block reason — caller turns it into a 403.
+ *
+ * Graduated by design: during the grace ("soft") and countdown ("warning")
+ * stages the user may still act — the banners nudge them — and only the
+ * "locked" stage (past the lockout deadline) hard-blocks. Blocking every
+ * unverified user here made verification effectively mandatory from minute
+ * one and broke checkout during the grace window.
  */
 export type EmailVerificationBlock = {
   reason: "unverified" | "locked";
@@ -208,13 +214,12 @@ export async function requireEmailVerified(
 ): Promise<EmailVerificationBlock | null> {
   const status = await getEmailVerificationStatus(userId);
   if (status.verified) return null;
+  if (status.stage !== "locked") return null;
   return {
-    reason: status.stage === "locked" ? "locked" : "unverified",
+    reason: "locked",
     stage: status.stage,
     message:
-      status.stage === "locked"
-        ? "Your verification window has ended. Please verify your email before continuing."
-        : "Please verify your email before completing this action.",
+      "Your verification window has ended. Please verify your email before continuing.",
   };
 }
 

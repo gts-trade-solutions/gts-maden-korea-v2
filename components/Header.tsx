@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import Image from "next/image";
+import { usePathname } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -76,6 +77,16 @@ export function Header() {
   const { totalItems } = useCart();
   const { isAuthenticated } = useAuth();
   const { wishlistCount } = useWishlist();
+  // Send the visitor back to the page they were on after signing in/up.
+  // /auth pages themselves fall back to the plain link (login's own default
+  // lands on /account) so we never redirect back into the auth flow.
+  const pathname = usePathname();
+  const authRedirect =
+    pathname && !pathname.startsWith("/auth")
+      ? `?redirect=${encodeURIComponent(pathname)}`
+      : "";
+  const loginHref = `/auth/login${authRedirect}`;
+  const registerHref = `/auth/register${authRedirect}`;
   // `formatPrice` accepts an INR amount and renders it in the visitor's
   // active currency at the live FX rate. The ticker's product prices
   // are stored in INR in the DB, so this is a straight pass-through.
@@ -334,7 +345,7 @@ export function Header() {
               {t("utilityStripBody")}
             </p>
             <Link
-              href="/auth/login"
+              href={loginHref}
               className="shrink-0 rounded-md bg-pink-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-pink-700"
             >
               {t("signIn")}
@@ -471,7 +482,7 @@ export function Header() {
                         size="sm"
                         className="flex-1 bg-pink-600 hover:bg-pink-700 text-white"
                       >
-                        <Link href="/auth/register">{t("joinFree")}</Link>
+                        <Link href={registerHref}>{t("joinFree")}</Link>
                       </Button>
                       <Button
                         asChild
@@ -479,7 +490,7 @@ export function Header() {
                         variant="outline"
                         className="flex-1 border-pink-300 text-pink-900 hover:bg-pink-100"
                       >
-                        <Link href="/auth/login">{t("signIn")}</Link>
+                        <Link href={loginHref}>{t("signIn")}</Link>
                       </Button>
                     </div>
                   </div>
@@ -851,14 +862,14 @@ export function Header() {
                   asChild
                   className="font-medium"
                 >
-                  <Link href="/auth/login">{t("signIn")}</Link>
+                  <Link href={loginHref}>{t("signIn")}</Link>
                 </Button>
                 <Button
                   size="sm"
                   asChild
                   className="bg-pink-600 hover:bg-pink-700 text-white font-medium"
                 >
-                  <Link href="/auth/register">{t("joinFree")}</Link>
+                  <Link href={registerHref}>{t("joinFree")}</Link>
                 </Button>
               </div>
             )}

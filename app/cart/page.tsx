@@ -694,7 +694,7 @@ async function clearPromo() {
                       variant="outline"
                       className="flex-1 border-pink-300 text-pink-900 hover:bg-pink-100"
                     >
-                      <Link href="/auth/login">{t("anonBannerSignIn")}</Link>
+                      <Link href="/auth/login?redirect=/cart">{t("anonBannerSignIn")}</Link>
                     </Button>
                   </div>
                 </CardContent>

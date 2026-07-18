@@ -38,7 +38,14 @@ export async function POST(req: Request) {
     await prisma.profiles.upsert({
       where: { id },
       update: { full_name: fullName },
-      create: { id, full_name: fullName },
+      // Start the email-verification grace clock at signup. Without this the
+      // status computation falls back to "now" on every read, so the user
+      // never progresses soft → warning → locked and the countdown is fake.
+      create: {
+        id,
+        full_name: fullName,
+        email_verification_grace_starts_at: new Date(),
+      },
     });
   } catch (e) {
     console.error("[register] MySQL create failed:", e);
