@@ -281,7 +281,7 @@
     "badgeLowStock": "Số lượng ít",
     "discountBadge": "GIẢM {pct}%",
     "saveLabel": "Tiết kiệm {amount} (GIẢM {pct}%)",
-    "badgeBackorder": "Giao hàng trong 2–3 tuần"
+    "badgeBackorder": "Nhận hàng trong 2–3 tuần"
   },
   "cookieConsent": {
     "ariaLabel": "Đồng ý cookie",

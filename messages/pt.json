@@ -281,7 +281,7 @@
     "badgeLowStock": "Stock reduzido",
     "discountBadge": "{pct}% DESCONTO",
     "saveLabel": "Poupe {amount} ({pct}% DESCONTO)",
-    "badgeBackorder": "Envio em 2–3 semanas"
+    "badgeBackorder": "Você recebe em 2–3 semanas"
   },
   "cookieConsent": {
     "ariaLabel": "Consentimento de cookies",

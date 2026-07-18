@@ -281,7 +281,7 @@
     "badgeLowStock": "สินค้าเหลือน้อย",
     "discountBadge": "ลด {pct}%",
     "saveLabel": "ประหยัด {amount} ({pct}% OFF)",
-    "badgeBackorder": "จัดส่งใน 2–3 สัปดาห์"
+    "badgeBackorder": "ได้รับสินค้าใน 2–3 สัปดาห์"
   },
   "cookieConsent": {
     "ariaLabel": "ความยินยอมการใช้คุกกี้",
