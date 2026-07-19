@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
+import { Prisma } from "@prisma/client";
 import { getRouteAuth } from "@/lib/auth/routeUser";
-import { supabaseForUser } from "@/lib/supabaseRoute";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 
 // Per-influencer cap lives on influencer_profiles.commission_cap_pct
 // (admin-managed via /admin/influencers). No global constant any more.
@@ -13,32 +16,8 @@ export async function GET(req: NextRequest) {
       { status: 401 }
     );
 
-  if (process.env.CATALOG_BACKEND === "mysql") {
-    try {
-      const { getGlobalPromosMysql } = await import("@/lib/data/influencer");
-      return NextResponse.json({ ok: true, promos: await getGlobalPromosMysql(user.id) });
-    } catch (e) {
-      console.error("[influencer/promos] MySQL read failed, falling back to Supabase:", e);
-    }
-  }
-
-  // Supabase fallback — RLS-gated, so use a service-role client scoped by user.id.
-  const sb = supabaseForUser(user.id);
-  const { data, error } = await sb
-    .from("promo_codes")
-    .select(
-      "id, code, product_id, active, discount_percent, commission_percent, uses, max_uses"
-    )
-    .eq("influencer_id", user.id)
-    .is("product_id", null) // GLOBAL only
-    .order("created_at", { ascending: false });
-
-  if (error)
-    return NextResponse.json(
-      { ok: false, error: error.message },
-      { status: 400 }
-    );
-  return NextResponse.json({ ok: true, promos: data });
+  const { getGlobalPromosMysql } = await import("@/lib/data/influencer");
+  return NextResponse.json({ ok: true, promos: await getGlobalPromosMysql(user.id) });
 }
 
 export async function POST(req: NextRequest) {
@@ -51,11 +30,6 @@ export async function POST(req: NextRequest) {
       { ok: false, error: "Unauthorized" },
       { status: 401 }
     );
-
-  // Under NextAuth there is no Supabase session; the influencer_profiles read
-  // and the promo_codes insert are RLS-gated, so run them on a service-role
-  // client scoped explicitly by user.id.
-  const sb = supabaseForUser(user.id);
 
   const u = Number(discount_percent ?? body.user_discount_pct ?? 0);
   const c = Number(commission_percent ?? body.commission_pct ?? 0);
@@ -77,16 +51,14 @@ export async function POST(req: NextRequest) {
   // row is missing (caller isn't actually an approved influencer), we
   // fail loudly rather than fall back to a constant — the previous
   // hardcoded 25% was masking this case.
-  const { data: prof, error: profErr } = await sb
-    .from("influencer_profiles")
-    .select("commission_cap_pct")
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (profErr) {
-    return NextResponse.json(
-      { ok: false, error: profErr.message },
-      { status: 500 }
-    );
+  let prof: { commission_cap_pct: number | null } | null;
+  try {
+    prof = await prisma.influencer_profiles.findUnique({
+      where: { user_id: user.id },
+      select: { commission_cap_pct: true },
+    });
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message }, { status: 500 });
   }
   if (!prof || prof.commission_cap_pct == null) {
     // Stable error code — client maps to a translated string. Plain
@@ -113,30 +85,31 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const payload = {
-    influencer_id: user.id,
-    code: String(code).toUpperCase(),
-    product_id: null, // GLOBAL
-    discount_percent: u,
-    commission_percent: c,
-    cap_percent: cap, // per-influencer cap snapshotted at creation
-    active: true,
-  };
-
-  const { data, error } = await sb
-    .from("promo_codes")
-    .insert(payload)
-    .select("id, code")
-    .single();
-
-  if (error) {
-    // Postgres 23505 = unique_violation. The promo_codes_code_key
-    // index makes `code` globally unique across influencers, so two
-    // influencers can never own the same code — first-come, first-
-    // served on the string namespace. Surface a friendly error code
-    // so the dashboard can translate it instead of dumping the raw
-    // "duplicate key value violates unique constraint" text.
-    if ((error as any).code === "23505") {
+  try {
+    const created = await prisma.promo_codes.create({
+      data: {
+        id: randomUUID(),
+        influencer_id: user.id,
+        code: String(code).toUpperCase(),
+        product_id: null, // GLOBAL
+        discount_percent: u,
+        commission_percent: c,
+        cap_percent: cap, // per-influencer cap snapshotted at creation
+        active: true,
+      },
+      select: { id: true, code: true },
+    });
+    return NextResponse.json({ ok: true, promo: jsonSafe(created) });
+  } catch (e: any) {
+    // P2002 = unique constraint violation. `promo_codes.code` is globally
+    // unique across influencers, so two influencers can never own the same
+    // code — first-come, first-served on the string namespace. Surface a
+    // friendly error code so the dashboard can translate it instead of
+    // dumping the raw constraint text.
+    if (
+      e instanceof Prisma.PrismaClientKnownRequestError &&
+      e.code === "P2002"
+    ) {
       return NextResponse.json(
         {
           ok: false,
@@ -147,19 +120,8 @@ export async function POST(req: NextRequest) {
       );
     }
     return NextResponse.json(
-      { ok: false, error: error.message },
+      { ok: false, error: e?.message || "CREATE_FAILED" },
       { status: 400 }
     );
   }
-
-  // Mirror the new promo into MySQL so it works at checkout + shows on the
-  // (MySQL-backed) dashboard. Best-effort — never fail the create.
-  try {
-    const { mirrorPromoIntoMysql } = await import("@/lib/data/influencer");
-    await mirrorPromoIntoMysql(sb, data.id);
-  } catch (e) {
-    console.error("[dual-write] promo create MySQL mirror failed:", e);
-  }
-
-  return NextResponse.json({ ok: true, promo: data });
 }

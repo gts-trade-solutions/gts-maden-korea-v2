@@ -2,8 +2,9 @@
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
 import { getRouteAuth } from "@/lib/auth/routeUser";
-import { supabaseForUser } from "@/lib/supabaseRoute";
+import { prisma } from "@/lib/db/prisma";
 import { requireEmailVerified } from "@/lib/auth/emailVerification";
 import { createAdminNotification } from "@/lib/admin/notifications";
 
@@ -14,11 +15,6 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const { user } = await getRouteAuth(req);
   if (!user) return json({ ok: false, error: "UNAUTH" }, 401);
-
-  // NextAuth has no Supabase session — the influencer_profiles/_requests reads
-  // and the request insert + mirror need a service-role client scoped by user.id
-  // (otherwise the insert is RLS-denied and applications can't be submitted).
-  const sb = supabaseForUser(user.id);
 
   // Email verification gate. K-Partnership is a real business
   // relationship — never want to onboard partners on un-reachable emails.
@@ -31,11 +27,10 @@ export async function POST(req: Request) {
   }
 
   // Already an influencer?
-  const { data: infl } = await sb
-    .from("influencer_profiles")
-    .select("active")
-    .eq("user_id", user.id)
-    .maybeSingle();
+  const infl = await prisma.influencer_profiles.findUnique({
+    where: { user_id: user.id },
+    select: { active: true },
+  });
   if (infl?.active)
     return json({
       ok: true,
@@ -43,14 +38,12 @@ export async function POST(req: Request) {
       message: "Already approved",
     });
 
-  // Existing request?
-  const { data: last } = await sb
-    .from("influencer_requests")
-    .select("id, status, created_at")
-    .eq("user_id", user.id)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  // Existing request? influencer_requests.user_id is UNIQUE (one row per user),
+  // so re-applying after a rejection updates that row instead of inserting.
+  const last = await prisma.influencer_requests.findUnique({
+    where: { user_id: user.id },
+    select: { id: true, status: true, created_at: true },
+  });
 
   if (last?.status === "pending") {
     return json({
@@ -61,34 +54,44 @@ export async function POST(req: Request) {
     });
   }
 
-  // Create (or re-apply after rejection)
-  const { data: created, error } = await sb
-    .from("influencer_requests")
-    .insert({
-      user_id: user.id,
-      handle: (body.handle || "").trim() || null,
-      note: (body.note || "").trim() || null,
-      social: body.social ?? {},
-      status: "pending",
-    })
-    .select("id, created_at")
-    .single();
+  const handle = (body.handle || "").trim() || null;
+  const note = (body.note || "").trim() || null;
+  const social = body.social ?? {};
 
-  if (error) return json({ ok: false, error: error.message }, 400);
-
-  // Mirror the application into MySQL (the status route reads it from MySQL).
+  // Create (or re-apply after rejection). `social` is NOT NULL in MySQL, so it
+  // is always written explicitly.
+  let created: { id: string; created_at: Date };
   try {
-    const { mirrorInfluencerRequestIntoMysql } = await import("@/lib/data/influencer");
-    await mirrorInfluencerRequestIntoMysql(sb, user.id);
-  } catch (e) {
-    console.error("[dual-write] influencer request MySQL mirror failed:", e);
+    created = await prisma.influencer_requests.upsert({
+      where: { user_id: user.id },
+      create: {
+        id: randomUUID(),
+        user_id: user.id,
+        handle,
+        note,
+        social,
+        status: "pending",
+      },
+      update: {
+        handle,
+        note,
+        social,
+        status: "pending",
+        reviewed_by: null,
+        reviewed_at: null,
+        updated_at: new Date(),
+      },
+      select: { id: true, created_at: true },
+    });
+  } catch (e: any) {
+    return json({ ok: false, error: e?.message || "REQUEST_FAILED" }, 400);
   }
 
   // Admin bell notification.
   void createAdminNotification({
     type: "kpartnership_requested",
     title: `New K-Partnership application${body.handle ? ` from @${String(body.handle).trim()}` : ""}`,
-    body: (body.note || "").trim() || null,
+    body: note,
     link: "/admin/influencers",
     severity: "info",
     meta: { request_id: created.id, user_id: user.id, handle: body.handle ?? null },

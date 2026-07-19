@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getRouteAuth } from "@/lib/auth/routeUser";
-import { supabaseForUser } from "@/lib/supabaseRoute";
+import { prisma } from "@/lib/db/prisma";
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const body = await req.json().catch(()=> ({}));
@@ -8,10 +8,6 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   const { user } = await getRouteAuth(req);
   if (!user) return NextResponse.json({ ok:false, error:"Unauthorized" }, { status:401 });
-
-  // NextAuth has no Supabase session — the RLS-gated profile read + promo_codes
-  // update + mirror need a service-role client scoped by user.id.
-  const sb = supabaseForUser(user.id);
 
   const u = Number(discount_percent ?? body.user_discount_pct ?? 0);
   const c = Number(commission_percent ?? body.commission_pct ?? 0);
@@ -23,13 +19,14 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   // 20% (inconsistent with the POST sibling which used 25), so an
   // influencer could create at 25 but couldn't edit past 20. Both now
   // read the same per-influencer value from influencer_profiles.
-  const { data: prof, error: profErr } = await sb
-    .from("influencer_profiles")
-    .select("commission_cap_pct")
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (profErr) {
-    return NextResponse.json({ ok:false, error: profErr.message }, { status:500 });
+  let prof: { commission_cap_pct: number | null } | null;
+  try {
+    prof = await prisma.influencer_profiles.findUnique({
+      where: { user_id: user.id },
+      select: { commission_cap_pct: true },
+    });
+  } catch (e: any) {
+    return NextResponse.json({ ok:false, error: e?.message }, { status:500 });
   }
   if (!prof || prof.commission_cap_pct == null) {
     // Stable error code — client maps to a translated string. Plain
@@ -56,55 +53,33 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     );
   }
 
-  const { data, error } = await sb
-    .from("promo_codes")
-    .update({
+  // Ownership + GLOBAL-only scoping enforced in the WHERE (updateMany returns a
+  // count, so a promo belonging to someone else simply matches 0 rows).
+  const res = await prisma.promo_codes.updateMany({
+    where: { id: params.id, influencer_id: user.id, product_id: null },
+    data: {
       active: !!active,
       discount_percent: u,
       commission_percent: c,
       cap_percent: cap,
-    })
-    .eq("id", params.id)
-    .eq("influencer_id", user.id)
-    .is("product_id", null) // GLOBAL only
-    .select("id")
-    .single();
-
-  if (error) return NextResponse.json({ ok:false, error:error.message }, { status:400 });
-
-  try {
-    const { mirrorPromoIntoMysql } = await import("@/lib/data/influencer");
-    await mirrorPromoIntoMysql(sb, params.id);
-  } catch (e) {
-    console.error("[dual-write] promo edit MySQL mirror failed:", e);
+    },
+  });
+  if (res.count === 0) {
+    return NextResponse.json({ ok:false, error:"Promo not found" }, { status:404 });
   }
 
-  return NextResponse.json({ ok:true, id:data.id });
+  return NextResponse.json({ ok:true, id: params.id });
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
   const { user } = await getRouteAuth(req);
   if (!user) return NextResponse.json({ ok:false, error:"Unauthorized" }, { status:401 });
 
-  // NextAuth has no Supabase session — without a service-role client the delete
-  // affects 0 rows under RLS (no error) while the MySQL delete still runs, so a
-  // "deleted" promo stays live at checkout. Scope by user.id.
-  const sb = supabaseForUser(user.id);
-
-  const { error } = await sb
-    .from("promo_codes")
-    .delete()
-    .eq("id", params.id)
-    .eq("influencer_id", user.id)
-    .is("product_id", null);
-
-  if (error) return NextResponse.json({ ok:false, error:error.message }, { status:400 });
-
-  try {
-    const { deletePromoFromMysql } = await import("@/lib/data/influencer");
-    await deletePromoFromMysql(params.id);
-  } catch (e) {
-    console.error("[dual-write] promo delete MySQL mirror failed:", e);
+  const res = await prisma.promo_codes.deleteMany({
+    where: { id: params.id, influencer_id: user.id, product_id: null },
+  });
+  if (res.count === 0) {
+    return NextResponse.json({ ok:false, error:"Promo not found" }, { status:404 });
   }
 
   return NextResponse.json({ ok:true });
