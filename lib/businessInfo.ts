@@ -82,8 +82,8 @@ export type BusinessProfile = {
 };
 
 const DEFAULT_PARTNER_ROLE = "Authorized Importer & Distribution Partner";
-const DEFAULT_SUPPORT_EMAIL = "info@madenkorea.com";
-const DEFAULT_BUSINESS_HOURS = "Mon-Fri 9AM - 6PM IST";
+const DEFAULT_SUPPORT_EMAIL = "info@bluderma.kr";
+const DEFAULT_BUSINESS_HOURS = "Mon-Fri 9AM - 6PM KST";
 
 export const DEFAULT_BUSINESS_INFO: BusinessInfo = {
   legalEntityName: null,

@@ -966,7 +966,7 @@ export default function AdminSettingsPage() {
                         onChange={(e) =>
                           setBusiness((b) => ({ ...b, businessHours: e.target.value }))
                         }
-                        placeholder="Mon-Fri 9AM - 6PM IST"
+                        placeholder="Mon-Fri 9AM - 6PM KST"
                       />
                     </div>
                   </div>
