@@ -132,14 +132,13 @@ export const metadata: Metadata = {
 };
 
 
-// Hostname for the Supabase storage bucket that serves all product
-// imagery. Resolved at build time so we can preconnect early and shave
-// a round trip off LCP. Falls back to a safe placeholder hostname if
-// the env var is missing — preconnect to a non-existent host is a
-// no-op, not an error.
-const SUPABASE_STORAGE_HOST = (() => {
+// Hostname of the CDN (CloudFront/S3) that serves all product imagery.
+// Resolved at build time so we can preconnect early and shave a round trip
+// off LCP. Empty when the env var is missing, in which case the hint is
+// skipped entirely.
+const MEDIA_CDN_HOST = (() => {
   try {
-    return new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").hostname;
+    return new URL(process.env.NEXT_PUBLIC_MEDIA_CDN_URL ?? "").hostname;
   } catch {
     return "";
   }
@@ -195,10 +194,10 @@ export default async function RootLayout({
             product image, hero banner, and brand logo on the site is
             served from this origin, so the first image fetch lands
             ~100-300ms sooner on cold connections. */}
-        {SUPABASE_STORAGE_HOST && (
+        {MEDIA_CDN_HOST && (
           <>
-            <link rel="preconnect" href={`https://${SUPABASE_STORAGE_HOST}`} crossOrigin="anonymous" />
-            <link rel="dns-prefetch" href={`https://${SUPABASE_STORAGE_HOST}`} />
+            <link rel="preconnect" href={`https://${MEDIA_CDN_HOST}`} crossOrigin="anonymous" />
+            <link rel="dns-prefetch" href={`https://${MEDIA_CDN_HOST}`} />
           </>
         )}
       </head>
