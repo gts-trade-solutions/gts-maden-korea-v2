@@ -1,4 +1,4 @@
-// lib/supabaseImageLoader.ts
+// lib/mediaImageLoader.ts
 //
 // Custom loader for Next.js <Image> that routes Supabase-storage URLs
 // through Supabase's image transformation endpoint instead of through
@@ -18,7 +18,7 @@
 //   bucket.
 //
 // Usage:
-//   <Image loader={supabaseImageLoader} src={publicUrl} ... />
+//   <Image loader={mediaImageLoader} src={publicUrl} ... />
 //
 // Non-Supabase URLs (e.g., unsplash banners) pass through unchanged.
 
@@ -33,7 +33,7 @@ type LoaderArgs = {
   quality?: number;
 };
 
-export function supabaseImageLoader({ src, width, quality }: LoaderArgs): string {
+export function mediaImageLoader({ src, width, quality }: LoaderArgs): string {
   // S3 backend: no Supabase render/image transform equivalent, so serve the
   // object directly — but if the stored value is a full Supabase Storage URL
   // (many *_url columns hold these), rewrite the host to CloudFront so the
@@ -76,4 +76,4 @@ export function supabaseImageLoader({ src, width, quality }: LoaderArgs): string
   return `${transformed}?${params.toString()}`;
 }
 
-export default supabaseImageLoader;
+export default mediaImageLoader;

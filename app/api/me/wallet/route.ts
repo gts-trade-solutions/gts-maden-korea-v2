@@ -1,7 +1,7 @@
 // app/api/me/wallet/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { getRouteAuth } from "@/lib/auth/routeUser";
-import { supabaseForUser, rpcForUser } from "@/lib/supabaseRoute";
+import { prisma } from "@/lib/db/prisma";
 
 // Influencer payout-method wallet. Stored as `payout_meta` jsonb on
 // `influencer_profiles`, written via `save_my_wallet_meta` RPC.
@@ -117,24 +117,10 @@ export async function GET(req: NextRequest) {
   const { user } = await getRouteAuth(req);
   if (!user) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
 
-  if (process.env.CATALOG_BACKEND === "mysql") {
-    try {
-      const { getWalletMetaMysql } = await import("@/lib/data/influencer");
-      const raw = await getWalletMetaMysql(user.id);
-      return NextResponse.json({ ok: true, wallet: sanitizeWallet(raw || {}) });
-    } catch (e) {
-      console.error("[me/wallet] MySQL read failed, falling back to Supabase:", e);
-    }
-  }
-
   try {
-    // get_my_wallet_meta is an auth.uid()-based RPC — under NextAuth route it
-    // through the service-role seam + get_my_wallet_meta_as(p_user_id) wrapper.
-    const sb = supabaseForUser(user.id);
-    const { data, error } = await rpcForUser(sb, user.id, "get_my_wallet_meta");
-    if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
-    const wallet = sanitizeWallet(data || {});
-    return NextResponse.json({ ok: true, wallet });
+    const { getWalletMetaMysql } = await import("@/lib/data/influencer");
+    const raw = await getWalletMetaMysql(user.id);
+    return NextResponse.json({ ok: true, wallet: sanitizeWallet(raw || {}) });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || "Failed" }, { status: 500 });
   }
@@ -208,23 +194,19 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // save_my_wallet_meta is an auth.uid()-based RPC — under NextAuth route it
-    // through the service-role seam + save_my_wallet_meta_as(p_user_id, …) wrapper.
-    const sb = supabaseForUser(user.id);
-    const { error } = await rpcForUser(sb, user.id, "save_my_wallet_meta", {
-      p_wallet: incoming as any,
+    // Port of save_my_wallet_meta: the wallet is `payout_meta` jsonb on the
+    // caller's influencer_profiles row. updateMany keeps it a no-op (0 rows)
+    // for a non-influencer instead of throwing on a missing row.
+    const res = await prisma.influencer_profiles.updateMany({
+      where: { user_id: user.id },
+      data: { payout_meta: incoming as any, updated_at: new Date() },
     });
-    if (error)
-      return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
-
-    // Mirror the saved wallet into MySQL (the wallet GET reads MySQL).
-    try {
-      const { mirrorInfluencerProfileIntoMysql } = await import("@/lib/data/influencer");
-      await mirrorInfluencerProfileIntoMysql(sb, user.id);
-    } catch (e) {
-      console.error("[dual-write] wallet save MySQL mirror failed:", e);
+    if (res.count === 0) {
+      return NextResponse.json(
+        { ok: false, error: "Influencer profile not found" },
+        { status: 404 }
+      );
     }
-
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || "Failed" }, { status: 500 });

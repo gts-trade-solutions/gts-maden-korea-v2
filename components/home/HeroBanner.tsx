@@ -7,7 +7,7 @@ import { useTranslations } from "next-intl";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "../ui/button";
 import type { Banner } from "@/types";
-import { supabaseImageLoader } from "@/lib/supabaseImageLoader";
+import { mediaImageLoader } from "@/lib/mediaImageLoader";
 
 interface HeroBannerProps {
   banners: Banner[];
@@ -111,7 +111,7 @@ export function HeroBanner({ banners }: HeroBannerProps) {
             loading={index === 0 ? "eager" : "lazy"}
             className="object-cover select-none"
             draggable={false}
-            loader={supabaseImageLoader}
+            loader={mediaImageLoader}
           />
         );
 

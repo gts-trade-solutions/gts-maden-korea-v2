@@ -1,11 +1,13 @@
 // app/api/instagram/conversations/sync/route.ts
 import { NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
 import { getRouteAuth } from "@/lib/auth/routeUser";
+import { prisma } from "@/lib/db/prisma";
 
 const GRAPH_BASE = "https://graph.facebook.com/v19.0";
 
 export async function POST(req: Request) {
-  const { user, sb } = await getRouteAuth();
+  const { user } = await getRouteAuth();
 
   if (!user) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
@@ -15,13 +17,20 @@ export async function POST(req: Request) {
   const instagramAccountId = searchParams.get("instagram_account_id");
 
   // 1) Resolve which IG account we’re syncing for
-  const { data: igAccount, error: igErr } = await sb
-    .from("instagram_accounts")
-    .select("id, owner_id, ig_business_account_id, facebook_page_id, access_token, page_access_token, username")
-    .eq("id", instagramAccountId)
-    .maybeSingle();
+  const igAccount = instagramAccountId
+    ? await prisma.instagram_accounts
+        .findUnique({
+          where: { id: instagramAccountId },
+          select: {
+            id: true, owner_id: true, ig_business_account_id: true,
+            facebook_page_id: true, access_token: true,
+            page_access_token: true, username: true,
+          },
+        })
+        .catch(() => null)
+    : null;
 
-  if (igErr || !igAccount) {
+  if (!igAccount) {
     return NextResponse.json(
       { error: "Instagram account not found" },
       { status: 404 }
@@ -88,22 +97,28 @@ export async function POST(req: Request) {
         participant_username: other?.name || null,
         last_message: lastMsg?.message || null,
         last_message_at: lastMsg?.created_time
-          ? new Date(lastMsg.created_time).toISOString()
+          ? new Date(lastMsg.created_time)
           : conv.updated_time
-          ? new Date(conv.updated_time).toISOString()
-          : new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+          ? new Date(conv.updated_time)
+          : new Date(),
+        updated_at: new Date(),
       };
     });
 
     if (rows.length > 0) {
-      const { error: upsertErr } = await sb
-        .from("instagram_conversations")
-        .upsert(rows, {
-          onConflict: "ig_conversation_id",
-        });
-
-      if (upsertErr) {
+      try {
+        // ig_conversation_id is UNIQUE — per-row upsert on it (Prisma has no
+        // upsertMany), inside one transaction.
+        await prisma.$transaction(
+          rows.map((r) =>
+            prisma.instagram_conversations.upsert({
+              where: { ig_conversation_id: r.ig_conversation_id },
+              create: { id: randomUUID(), ...r },
+              update: { ...r },
+            })
+          )
+        );
+      } catch (upsertErr) {
         console.error("Conversations upsert error:", upsertErr);
         throw new Error("Failed to save conversations");
       }

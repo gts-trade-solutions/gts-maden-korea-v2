@@ -16,7 +16,7 @@ import { getRouteAuth } from "@/lib/auth/routeUser";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
-  const { user, sb } = await getRouteAuth(req);
+  const { user } = await getRouteAuth(req);
   if (!user) {
     return NextResponse.json(
       { ok: false, error: "Unauthorized" },
@@ -24,32 +24,8 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  if (process.env.CATALOG_BACKEND === "mysql") {
-    try {
-      const { getInfluencerProfileMysql } = await import("@/lib/data/influencer");
-      const prof = await getInfluencerProfileMysql(user.id);
-      return NextResponse.json({ ok: true, handle: prof?.handle ?? null, influencer: prof });
-    } catch (e) {
-      console.error("[me/influencer] MySQL read failed, falling back to Supabase:", e);
-    }
-  }
+  const { getInfluencerProfileMysql } = await import("@/lib/data/influencer");
+  const prof = await getInfluencerProfileMysql(user.id);
+  return NextResponse.json({ ok: true, handle: prof?.handle ?? null, influencer: prof });
 
-  const { data, error } = await sb
-    .from("influencer_profiles")
-    .select("handle, display_name, active, applicable_countries")
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
-  }
-
-  // Mirror `handle` at the top level too — the existing /influencer/links
-  // page reads `mj?.handle` rather than `mj.influencer.handle`. Keeping
-  // both shapes means the page works as-is without an additional patch.
-  return NextResponse.json({
-    ok: true,
-    handle: data?.handle ?? null,
-    influencer: data ?? null,
-  });
 }

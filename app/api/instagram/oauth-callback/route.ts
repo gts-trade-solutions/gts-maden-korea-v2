@@ -110,8 +110,8 @@ export async function GET(req: Request) {
     ).toISOString();
   }
 
-  // 5) Save to instagram_accounts for current Supabase user
-  const { user, sb } = await getRouteAuth(req);
+  // 5) Save to instagram_accounts for the current user
+  const { user } = await getRouteAuth(req);
 
   if (!user) {
     console.error("No user in oauth callback");
@@ -128,15 +128,25 @@ export async function GET(req: Request) {
     ig_business_account_id: igBusinessAccountId,
     username: igUsername,
     access_token: longLivedUserToken,
-    token_expires_at: tokenExpiresAt,
+    token_expires_at: tokenExpiresAt ? new Date(tokenExpiresAt) : null,
     is_active: true,
     facebook_page_id: facebookPageId,
     page_access_token: pageAccessToken,
   };
 
-  const { error: upsertError } = await sb
-    .from("instagram_accounts")
-    .upsert(record, { onConflict: "owner_id,ig_business_account_id" });
+  let upsertError = null;
+  try {
+    const { upsertMetaRows } = await import("@/lib/data/meta");
+    const { prisma } = await import("@/lib/db/prisma");
+    await upsertMetaRows(prisma.instagram_accounts, [record], (r) => ({
+      owner_id_ig_business_account_id: {
+        owner_id: r.owner_id,
+        ig_business_account_id: r.ig_business_account_id,
+      },
+    }));
+  } catch (e) {
+    upsertError = e;
+  }
 
   if (upsertError) {
     console.error("Upsert instagram_accounts failed", upsertError);

@@ -30,26 +30,23 @@ export default async function InfluencerLayout({ children }: { children: ReactNo
 
   // Role + influencer gating via service-role (works under both backends),
   // scoped explicitly by the resolved userId.
-  const { createServiceClient } = await import("@/lib/supabaseServer");
-  const admin = createServiceClient();
+  const { prisma } = await import("@/lib/db/prisma");
 
   // Check profile role (tolerate missing row)
-  const { data: prof } = await admin
-    .from("profiles")
-    .select("role, full_name")
-    .eq("id", userId)
-    .maybeSingle();
+  const prof = await prisma.profiles.findUnique({
+    where: { id: userId },
+    select: { role: true, full_name: true },
+  });
 
   const isAdmin = prof?.role === "admin" || prof?.role === "super_admin";
 
   // If not admin, require active influencer profile
   let inflHandle: string | null = null;
   if (!isAdmin) {
-    const { data: infl } = await admin
-      .from("influencer_profiles")
-      .select("handle, active")
-      .eq("user_id", userId)
-      .maybeSingle();
+    const infl = await prisma.influencer_profiles.findUnique({
+      where: { user_id: userId },
+      select: { handle: true, active: true },
+    });
 
     if (!infl?.active) {
       // Not an approved influencer yet → send to request page

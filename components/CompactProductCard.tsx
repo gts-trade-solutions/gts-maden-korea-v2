@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useCurrency } from "@/lib/contexts/CurrencyContext";
-import { supabaseImageLoader } from "@/lib/supabaseImageLoader";
+import { mediaImageLoader } from "@/lib/mediaImageLoader";
 import { resolveMediaUrl } from "@/lib/storage/backend";
 
 // Compact horizontal product card used inside the VideoPlayerModal's
@@ -92,7 +92,7 @@ export function CompactProductCard({ product }: { product: CompactProduct }) {
             fill
             className="object-cover"
             sizes="64px"
-            loader={supabaseImageLoader}
+            loader={mediaImageLoader}
           />
         ) : (
           <div className="h-full w-full animate-pulse bg-muted" />

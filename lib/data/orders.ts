@@ -99,62 +99,6 @@ const ORDER_FIELDS =
   "payment_reference, payment_meta, paid_at, fx_rate_snapshot, subtotal_inr, shipping_fee_inr, " +
   "discount_total_inr, total_inr, recipient_locale, created_at, updated_at";
 
-export async function mirrorOrderIntoMysql(sb: any, orderId: string): Promise<void> {
-  const { data: o } = await sb.from("orders").select(ORDER_FIELDS).eq("id", orderId).maybeSingle();
-  if (!o) return;
-
-  const data: any = {
-    id: o.id,
-    user_id: o.user_id,
-    order_number: o.order_number ?? null,
-    status: o.status,
-    currency: o.currency ?? "INR",
-    subtotal: o.subtotal ?? 0,
-    shipping_fee: o.shipping_fee ?? 0,
-    discount_total: o.discount_total ?? 0,
-    total: o.total ?? 0,
-    shipping_address_id: o.shipping_address_id ?? null,
-    address_snapshot: o.address_snapshot ?? null,
-    notes: o.notes ?? null,
-    promo_code_id: o.promo_code_id ?? null,
-    promo_snapshot: o.promo_snapshot ?? {},
-    payment_provider: o.payment_provider ?? null,
-    payment_reference: o.payment_reference ?? null,
-    payment_meta: o.payment_meta ?? null,
-    paid_at: o.paid_at ? new Date(o.paid_at) : null,
-    fx_rate_snapshot: o.fx_rate_snapshot ?? null,
-    subtotal_inr: o.subtotal_inr ?? null,
-    shipping_fee_inr: o.shipping_fee_inr ?? null,
-    discount_total_inr: o.discount_total_inr ?? null,
-    total_inr: o.total_inr ?? null,
-    recipient_locale: o.recipient_locale ?? null,
-    ...(o.created_at ? { created_at: new Date(o.created_at) } : {}),
-  };
-  await prisma.orders.upsert({ where: { id: o.id }, update: data, create: data });
-
-  const { data: items } = await sb
-    .from("order_items")
-    .select("id, order_id, product_id, sku, name, hero_image_path, unit_price, mrp, quantity, line_total, created_at")
-    .eq("order_id", orderId);
-  await prisma.order_items.deleteMany({ where: { order_id: orderId } });
-  if (items?.length) {
-    await prisma.order_items.createMany({
-      data: items.map((it: any) => ({
-        id: it.id,
-        order_id: it.order_id,
-        product_id: it.product_id ?? null,
-        sku: it.sku ?? null,
-        name: it.name,
-        hero_image_path: it.hero_image_path ?? null,
-        unit_price: it.unit_price,
-        mrp: it.mrp ?? null,
-        quantity: it.quantity,
-        line_total: it.line_total,
-        ...(it.created_at ? { created_at: new Date(it.created_at) } : {}),
-      })),
-    });
-  }
-}
 
 // TypeScript port of create_order_from_cart: build a pending_payment order from
 // the user's MySQL cart (recalc totals first, then snapshot the items). MySQL is

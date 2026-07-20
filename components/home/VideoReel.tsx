@@ -12,7 +12,7 @@ import {
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Volume2, VolumeX } from "lucide-react";
-import { supabaseImageLoader } from "@/lib/supabaseImageLoader";
+import { mediaImageLoader } from "@/lib/mediaImageLoader";
 import { supabaseUrlToCdn } from "@/lib/storage/backend";
 
 // Shared carousel primitive used by both home-page video sections.
@@ -387,7 +387,7 @@ function ReelCard<T extends ReelItem>({
               videoReady ? "opacity-0" : "opacity-100",
             ].join(" ")}
             sizes="(max-width: 768px) 50vw, (max-width: 1280px) 25vw, 16vw"
-            loader={supabaseImageLoader}
+            loader={mediaImageLoader}
           />
         )}
 

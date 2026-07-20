@@ -1,40 +1,34 @@
 // app/api/facebook/adaccounts/route.js
 import { NextResponse } from "next/server";
-import { getAdminSupabase, ADMIN_OWNER_ID } from "@/lib/adminSupabase";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
+import { ADMIN_OWNER_ID } from "@/lib/adminOwner";
 
 const GRAPH_BASE = "https://graph.facebook.com/v21.0";
+
+const NO_OWNER = {
+  error:
+    "ADMIN_OWNER_ID / FB_OWNER_ID env not set. Please set FB_OWNER_ID to the owner user UUID.",
+};
 
 // 🔹 GET = just read current connection from DB (no pages list)
 export async function GET() {
   try {
-    const supabase = getAdminSupabase();
-
     if (!ADMIN_OWNER_ID) {
-      return NextResponse.json(
-        {
-          error:
-            "ADMIN_OWNER_ID / FB_OWNER_ID env not set. Please set FB_OWNER_ID to a Supabase user UUID.",
-        },
-        { status: 400 }
-      );
+      return NextResponse.json(NO_OWNER, { status: 400 });
     }
 
-    const { data: account, error: accError } = await supabase
-      .from("instagram_accounts")
-      .select("id, owner_id, username, ig_business_account_id, facebook_page_id")
-      .eq("owner_id", ADMIN_OWNER_ID)
-      .eq("is_active", true)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (accError) {
-      console.error("GET /api/facebook/adaccounts error:", accError);
-      return NextResponse.json(
-        { error: "Failed to load account connection" },
-        { status: 500 }
-      );
-    }
+    const account = await prisma.instagram_accounts.findFirst({
+      where: { owner_id: ADMIN_OWNER_ID, is_active: true },
+      select: {
+        id: true,
+        owner_id: true,
+        username: true,
+        ig_business_account_id: true,
+        facebook_page_id: true,
+      },
+      orderBy: { created_at: "desc" },
+    });
 
     if (!account) {
       return NextResponse.json(
@@ -46,7 +40,7 @@ export async function GET() {
       );
     }
 
-    return NextResponse.json({ data: account }, { status: 200 });
+    return NextResponse.json({ data: jsonSafe(account) }, { status: 200 });
   } catch (err) {
     console.error("GET /api/facebook/adaccounts unexpected error", err);
     return NextResponse.json(
@@ -59,35 +53,15 @@ export async function GET() {
 // 🔹 POST = fetch Pages + IG Biz from Graph and store primary page
 export async function POST() {
   try {
-    const supabase = getAdminSupabase();
-
     if (!ADMIN_OWNER_ID) {
-      return NextResponse.json(
-        {
-          error:
-            "ADMIN_OWNER_ID / FB_OWNER_ID env not set. Please set FB_OWNER_ID to a Supabase user UUID.",
-        },
-        { status: 400 }
-      );
+      return NextResponse.json(NO_OWNER, { status: 400 });
     }
 
     // 1️⃣ Get current instagram_accounts row for our admin owner
-    const { data: account, error: accError } = await supabase
-      .from("instagram_accounts")
-      .select("*")
-      .eq("owner_id", ADMIN_OWNER_ID)
-      .eq("is_active", true)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (accError) {
-      console.error("instagram_accounts error:", accError);
-      return NextResponse.json(
-        { error: "Failed to load instagram account config" },
-        { status: 400 }
-      );
-    }
+    const account = await prisma.instagram_accounts.findFirst({
+      where: { owner_id: ADMIN_OWNER_ID, is_active: true },
+      orderBy: { created_at: "desc" },
+    });
 
     if (!account) {
       return NextResponse.json(
@@ -137,19 +111,28 @@ export async function POST() {
     // 3️⃣ Update instagram_accounts with Page + IG info
     const updatePayload = {
       facebook_page_id: primaryPage?.id || account.facebook_page_id,
-      ig_business_account_id: igBiz?.id || account.ig_business_account_id,
+      ig_business_account_id:
+        igBiz?.id || account.ig_business_account_id,
       username: igBiz?.username || account.username,
-      page_access_token: primaryPage?.access_token || account.page_access_token,
+      page_access_token:
+        primaryPage?.access_token || account.page_access_token,
+      updated_at: new Date(),
     };
 
-    const { data: updated, error: updateError } = await supabase
-      .from("instagram_accounts")
-      .update(updatePayload)
-      .eq("id", account.id)
-      .select("id, owner_id, username, ig_business_account_id, facebook_page_id")
-      .single();
-
-    if (updateError) {
+    let updated;
+    try {
+      updated = await prisma.instagram_accounts.update({
+        where: { id: account.id },
+        data: updatePayload,
+        select: {
+          id: true,
+          owner_id: true,
+          username: true,
+          ig_business_account_id: true,
+          facebook_page_id: true,
+        },
+      });
+    } catch (updateError) {
       console.error("Update instagram_accounts error:", updateError);
       return NextResponse.json(
         { error: "Failed to update account with Facebook Page" },
@@ -159,7 +142,7 @@ export async function POST() {
 
     return NextResponse.json(
       {
-        data: updated,
+        data: jsonSafe(updated),
         pages,
       },
       { status: 200 }

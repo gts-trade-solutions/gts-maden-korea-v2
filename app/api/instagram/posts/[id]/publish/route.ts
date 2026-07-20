@@ -1,6 +1,8 @@
 // app/api/instagram/posts/[id]/publish/route.ts
 import { NextResponse } from "next/server";
 import { getRouteAuth } from "@/lib/auth/routeUser";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 
 const IG_GRAPH_BASE = "https://graph.facebook.com/v19.0";
 
@@ -8,7 +10,7 @@ export async function POST(
   req: Request,
   { params }: { params: { id: string } }
 ) {
-  const { user, sb } = await getRouteAuth();
+  const { user } = await getRouteAuth();
 
   if (!user) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
@@ -17,29 +19,29 @@ export async function POST(
   const postId = params.id;
 
   // 1) Load post + campaign + instagram account (including token)
-  const { data: post, error: postErr } = await sb
-    .from("campaign_posts")
-    .select(
-      `
-      *,
-      campaigns!inner (
-        id,
-        owner_id,
-        instagram_account_id
-      ),
-      instagram_accounts!inner (
-        id,
-        owner_id,
-        ig_business_account_id,
-        access_token
-      )
-    `
-    )
-    .eq("id", postId)
-    .maybeSingle();
+  const post = await prisma.campaign_posts
+    .findUnique({
+      where: { id: postId },
+      include: {
+        campaigns: {
+          select: { id: true, owner_id: true, instagram_account_id: true },
+        },
+        instagram_accounts: {
+          select: {
+            id: true,
+            owner_id: true,
+            ig_business_account_id: true,
+            access_token: true,
+          },
+        },
+      },
+    })
+    .catch((e) => {
+      console.error("Post load error:", e);
+      return null;
+    });
 
-  if (postErr || !post) {
-    console.error("Post load error:", postErr);
+  if (!post) {
     return NextResponse.json(
       { error: "Post not found or not accessible" },
       { status: 404 }
@@ -74,10 +76,10 @@ export async function POST(
   }
 
   // 2) Mark as publishing
-  await sb
-    .from("campaign_posts")
-    .update({ status: "publishing", error_message: null })
-    .eq("id", postId);
+  await prisma.campaign_posts.update({
+    where: { id: postId },
+    data: { status: "publishing", error_message: null },
+  });
 
   try {
     // 3) Create media container
@@ -142,36 +144,37 @@ export async function POST(
     const permalink = detailsJson.permalink || null;
 
     // 6) Update post in DB
-    const { data: updatedPost, error: updateErr } = await sb
-      .from("campaign_posts")
-      .update({
-        status: "published",
-        instagram_media_id: instagramMediaId,
-        permalink,
-        published_at: new Date().toISOString(),
-        error_message: null,
-      })
-      .eq("id", postId)
-      .select("*")
-      .single();
-
-    if (updateErr) {
+    let updatedPost;
+    try {
+      updatedPost = await prisma.campaign_posts.update({
+        where: { id: postId },
+        data: {
+          status: "published",
+          instagram_media_id: instagramMediaId,
+          permalink,
+          published_at: new Date(),
+          error_message: null,
+        },
+      });
+    } catch (updateErr) {
       console.error("Post update error after publish:", updateErr);
       throw new Error("Published on IG but failed to update DB");
     }
 
-    return NextResponse.json({ post: updatedPost });
+    return NextResponse.json({ post: jsonSafe(updatedPost) });
   } catch (err: any) {
     console.error("Publish error:", err);
 
     // Set failed status + error
-    await sb
-      .from("campaign_posts")
+    await prisma.campaign_posts
       .update({
-        status: "failed",
-        error_message: err.message || "Unknown error",
+        where: { id: postId },
+        data: {
+          status: "failed",
+          error_message: err.message || "Unknown error",
+        },
       })
-      .eq("id", postId);
+      .catch(() => {});
 
     return NextResponse.json(
       { error: err.message || "Failed to publish post" },

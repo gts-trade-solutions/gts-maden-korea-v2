@@ -1,7 +1,8 @@
 // app/api/me/payouts/request/route.ts
 import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
 import { getRouteAuth } from "@/lib/auth/routeUser";
-import { supabaseForUser } from "@/lib/supabaseRoute";
+import { prisma } from "@/lib/db/prisma";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 import { getAdminRecipientEmails } from "@/lib/notificationRecipients";
 
@@ -18,12 +19,6 @@ export async function POST(req: NextRequest) {
       { status: 401 }
     );
   }
-
-  // Under NextAuth there is no Supabase session, so the RLS-gated earnings +
-  // payout reads, the payout insert, and the mirror must run on a service-role
-  // client scoped by user.id (otherwise reads return 0 and the insert is denied
-  // — every withdrawal request would be rejected).
-  const sb = supabaseForUser(user.id);
 
   // ---- Parse body from frontend ----
   let body: any;
@@ -49,46 +44,34 @@ export async function POST(req: NextRequest) {
   }
 
   // ---- 1) Recalculate available wallet on the server ----
-  // Same logic idea as your /api/me/summary: available = approved commissions - payouts
-  const { data: lifeAgg, error: lifeErr } = await sb
-    .from("order_attributions")
-    .select("commission_amount, status")
-    .eq("influencer_id", user.id);
-
-  if (lifeErr) {
-    console.error("order_attributions error", lifeErr);
+  // Same logic idea as /api/me/summary: available = approved commissions - payouts.
+  let approvedTotal = 0;
+  let debited = 0;
+  try {
+    const [approvedAgg, payoutAgg] = await Promise.all([
+      // Only commissions that are actually unlocked / withdrawable.
+      prisma.order_attributions.aggregate({
+        _sum: { commission_amount: true },
+        where: { influencer_id: user.id, status: "approved" },
+      }),
+      // Any payout that isn't failed/canceled is treated as debited.
+      prisma.influencer_payouts.aggregate({
+        _sum: { amount: true },
+        where: {
+          influencer_id: user.id,
+          status: { in: ["initiated", "processing", "paid"] },
+        },
+      }),
+    ]);
+    approvedTotal = Number(approvedAgg._sum.commission_amount ?? 0);
+    debited = Number(payoutAgg._sum.amount ?? 0);
+  } catch (e) {
+    console.error("payout balance read error", e);
     return NextResponse.json(
       { ok: false, error: "Failed to load earnings." },
       { status: 500 }
     );
   }
-
-  const lifetimeRows = lifeAgg || [];
-
-  // Only commissions that are actually unlocked / withdrawable
-  const approvedTotal = lifetimeRows
-    .filter((r: any) => r.status === "approved")
-    .reduce((acc: number, r: any) => acc + Number(r.commission_amount || 0), 0);
-
-  const { data: payoutsAgg, error: payoutsErr } = await sb
-    .from("influencer_payouts")
-    .select("amount, status")
-    .eq("influencer_id", user.id)
-    // any payout that isn't failed/canceled is treated as debited
-    .in("status", ["initiated", "processing", "paid"]);
-
-  if (payoutsErr) {
-    console.error("payouts error", payoutsErr);
-    return NextResponse.json(
-      { ok: false, error: "Failed to load payouts." },
-      { status: 500 }
-    );
-  }
-
-  const debited = (payoutsAgg || []).reduce(
-    (acc: number, r: any) => acc + Number(r.amount || 0),
-    0
-  );
 
   const available = Math.max(0, approvedTotal - debited);
 
@@ -105,34 +88,30 @@ export async function POST(req: NextRequest) {
   // ---- 2) Insert payout row: this creates "Pending" in UI & debits wallet ----
   // NOTE: even though DB default is 'pending', we explicitly set 'initiated'
   // so it matches your frontend PayoutRow status & "Pending review" badge.
-  const { data: inserted, error: insertErr } = await sb
-    .from("influencer_payouts")
-    .insert({
-      influencer_id: user.id,
-      amount,
-      currency: "INR",
-      status: "initiated", // <-- pending request in UI
-      method,
-      contact_email,
-      notes: request_note, // JSON string with UPI/bank details from frontend
-    })
-    .select("id")
-    .single();
-
-  if (insertErr) {
-    console.error("insert payout error", insertErr);
+  // `covering_orders` is NOT NULL (json) in MySQL and has no Prisma-applied
+  // default, so it is written explicitly.
+  let inserted: { id: string };
+  try {
+    inserted = await prisma.influencer_payouts.create({
+      data: {
+        id: randomUUID(),
+        influencer_id: user.id,
+        amount,
+        currency: "INR",
+        status: "initiated", // <-- pending request in UI
+        method,
+        contact_email,
+        notes: request_note, // JSON string with UPI/bank details from frontend
+        covering_orders: [],
+      },
+      select: { id: true },
+    });
+  } catch (e) {
+    console.error("insert payout error", e);
     return NextResponse.json(
       { ok: false, error: "Could not create payout request." },
       { status: 500 }
     );
-  }
-
-  // Mirror the payout into MySQL (summary + payouts dashboard read MySQL).
-  try {
-    const { mirrorPayoutIntoMysql } = await import("@/lib/data/influencer");
-    await mirrorPayoutIntoMysql(sb, inserted.id);
-  } catch (e) {
-    console.error("[dual-write] payout request MySQL mirror failed:", e);
   }
 
   // ---- 3) Send AWS SES email to admin with payout details ----

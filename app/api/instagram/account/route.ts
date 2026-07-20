@@ -1,47 +1,41 @@
 // app/api/instagram/account/route.ts
 import { NextResponse } from "next/server";
-import { getAdminSupabase, ADMIN_OWNER_ID } from "@/lib/adminSupabase";
+import { randomUUID } from "node:crypto";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
+import { ADMIN_OWNER_ID } from "@/lib/adminOwner";
 
 export async function GET() {
   try {
-    const supabase = getAdminSupabase();
-
     if (!ADMIN_OWNER_ID) {
       return NextResponse.json(
         {
           error:
-            "ADMIN_OWNER_ID / FB_OWNER_ID env not set. Please set FB_OWNER_ID to a Supabase user UUID.",
+            "ADMIN_OWNER_ID / FB_OWNER_ID env not set. Please set FB_OWNER_ID to the owner user UUID.",
         },
         { status: 400 }
       );
     }
 
-    let query = supabase
-      .from("instagram_accounts")
-      .select(
-        "id, owner_id, ig_business_account_id, username, profile_picture_url, token_expires_at, is_active"
-      )
-      .eq("is_active", true)
-      .eq("owner_id", ADMIN_OWNER_ID)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    const data = await prisma.instagram_accounts.findFirst({
+      where: { is_active: true, owner_id: ADMIN_OWNER_ID },
+      select: {
+        id: true,
+        owner_id: true,
+        ig_business_account_id: true,
+        username: true,
+        profile_picture_url: true,
+        token_expires_at: true,
+        is_active: true,
+      },
+      orderBy: { created_at: "desc" },
+    });
 
-    const { data, error } = await query;
-
-    if (error) {
-      console.error("GET /api/instagram/account error:", error);
-      return NextResponse.json(
-        { error: "Failed to load instagram account" },
-        { status: 500 }
-      );
-    }
-
-    return NextResponse.json({ account: data ?? null }, { status: 200 });
+    return NextResponse.json({ account: jsonSafe(data ?? null) }, { status: 200 });
   } catch (err: any) {
     console.error("GET /api/instagram/account unexpected error:", err);
     return NextResponse.json(
-      { error: "Unexpected error loading instagram account" },
+      { error: "Failed to load instagram account" },
       { status: 500 }
     );
   }
@@ -49,13 +43,11 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
-    const supabase = getAdminSupabase();
-
     if (!ADMIN_OWNER_ID) {
       return NextResponse.json(
         {
           error:
-            "ADMIN_OWNER_ID / FB_OWNER_ID env not set. Please set FB_OWNER_ID to a Supabase user UUID.",
+            "ADMIN_OWNER_ID / FB_OWNER_ID env not set. Please set FB_OWNER_ID to the owner user UUID.",
         },
         { status: 400 }
       );
@@ -76,39 +68,44 @@ export async function POST(req: Request) {
       );
     }
 
-    const expiresAt = token_expires_at
-      ? new Date(token_expires_at).toISOString()
-      : null;
+    const expiresAt = token_expires_at ? new Date(token_expires_at) : null;
 
-    const { data, error } = await supabase
-      .from("instagram_accounts")
-      .upsert(
-        {
+    // Upsert on the (owner_id, ig_business_account_id) unique constraint —
+    // the Prisma equivalent of the old Supabase onConflict clause.
+    const data = await prisma.instagram_accounts.upsert({
+      where: {
+        owner_id_ig_business_account_id: {
           owner_id: ADMIN_OWNER_ID,
-          ig_business_account_id,
-          username,
-          access_token,
-          token_expires_at: expiresAt,
-          is_active: true,
+          ig_business_account_id: String(ig_business_account_id),
         },
-        {
-          onConflict: "owner_id, ig_business_account_id",
-        }
-      )
-      .select(
-        "id, owner_id, ig_business_account_id, username, token_expires_at, is_active"
-      )
-      .single();
+      },
+      create: {
+        id: randomUUID(),
+        owner_id: ADMIN_OWNER_ID,
+        ig_business_account_id: String(ig_business_account_id),
+        username: username ?? null,
+        access_token,
+        token_expires_at: expiresAt,
+        is_active: true,
+      },
+      update: {
+        username: username ?? null,
+        access_token,
+        token_expires_at: expiresAt,
+        is_active: true,
+        updated_at: new Date(),
+      },
+      select: {
+        id: true,
+        owner_id: true,
+        ig_business_account_id: true,
+        username: true,
+        token_expires_at: true,
+        is_active: true,
+      },
+    });
 
-    if (error) {
-      console.error("POST /api/instagram/account upsert error:", error);
-      return NextResponse.json(
-        { error: "Failed to save instagram account" },
-        { status: 500 }
-      );
-    }
-
-    return NextResponse.json({ account: data }, { status: 200 });
+    return NextResponse.json({ account: jsonSafe(data) }, { status: 200 });
   } catch (err: any) {
     console.error("POST /api/instagram/account unexpected error:", err);
     return NextResponse.json(

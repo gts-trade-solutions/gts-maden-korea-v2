@@ -755,13 +755,13 @@ export default function AdminDashboard() {
             </CardHeader>
             <CardContent>
               <p className="text-sm text-muted-foreground mb-4">
-                Reply to Instagram direct messages, manage comments on your
-                posts, and review recent published content.
+                Review recent published content and manage your Instagram
+                posts.
               </p>
               <Button
                 variant="outline"
                 className="w-full"
-                onClick={() => router.push("/admin/instagram/inbox")}
+                onClick={() => router.push("/admin/instagram/posts")}
               >
                 Open Engagement
               </Button>

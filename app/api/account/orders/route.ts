@@ -13,37 +13,23 @@ export async function GET() {
     return NextResponse.json({ orders: [], items: [], error: "UNAUTHENTICATED" }, { status: 401 });
   }
 
-  if (process.env.CATALOG_BACKEND === "mysql") {
-    const { prisma } = await import("@/lib/db/prisma");
-    const orders = await prisma.orders.findMany({
-      where: { user_id: userId },
-      select: {
-        id: true, order_number: true, status: true, currency: true,
-        subtotal: true, shipping_fee: true, discount_total: true, total: true, created_at: true,
-      },
-      orderBy: { created_at: "desc" },
-    });
-    const ids = orders.map((o) => o.id);
-    const items = ids.length
-      ? await prisma.order_items.findMany({
-          where: { order_id: { in: ids } },
-          select: { order_id: true, product_id: true, name: true, quantity: true, unit_price: true },
-        })
-      : [];
-    return NextResponse.json({ orders: jsonSafe(orders), items: jsonSafe(items) });
-  }
 
-  // Supabase fallback (default)
-  const { supabaseForUser } = await import("@/lib/supabaseRoute");
-  const sb = supabaseForUser(userId);
-  const { data: orders } = await sb
-    .from("orders")
-    .select("id, order_number, status, currency, subtotal, shipping_fee, discount_total, total, created_at")
-    .eq("user_id", userId)
-    .order("created_at", { ascending: false });
-  const ids = (orders ?? []).map((o: any) => o.id);
+  const { prisma } = await import("@/lib/db/prisma");
+  const orders = await prisma.orders.findMany({
+    where: { user_id: userId },
+    select: {
+      id: true, order_number: true, status: true, currency: true,
+      subtotal: true, shipping_fee: true, discount_total: true, total: true, created_at: true,
+    },
+    orderBy: { created_at: "desc" },
+  });
+  const ids = orders.map((o) => o.id);
   const items = ids.length
-    ? (await sb.from("order_items").select("order_id, product_id, name, quantity, unit_price").in("order_id", ids)).data ?? []
+    ? await prisma.order_items.findMany({
+        where: { order_id: { in: ids } },
+        select: { order_id: true, product_id: true, name: true, quantity: true, unit_price: true },
+      })
     : [];
-  return NextResponse.json({ orders: orders ?? [], items });
+  return NextResponse.json({ orders: jsonSafe(orders), items: jsonSafe(items) });
+
 }

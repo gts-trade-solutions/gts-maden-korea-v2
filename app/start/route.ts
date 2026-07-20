@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
 import { getRouteUser } from "@/lib/auth/routeUser";
-import { supabaseForUser, rpcForUser } from "@/lib/supabaseRoute";
+import { prisma } from "@/lib/db/prisma";
 
 export const dynamic = "force-dynamic";
 
@@ -17,26 +18,30 @@ export async function GET(req: Request) {
     return NextResponse.redirect(u);
   }
 
-  // Logged-in → ensure there is a pending request (idempotent). request_influencer
-  // is auth.uid()-based, so route through the service-role seam + the
-  // request_influencer_as(p_user_id, …) wrapper (else it no-ops under NextAuth).
+  // Logged-in → ensure there is a pending request (idempotent). Port of the
+  // request_influencer RPC: influencer_requests.user_id is UNIQUE, so a create
+  // that races an existing row is simply skipped (an already-approved or
+  // pending application must not be reset to pending here).
   try {
-    const sb = supabaseForUser(user.id);
-    await rpcForUser(sb, user.id, "request_influencer", {
-      p_handle: null,
-      p_social: {},
-      p_note: null,
+    const existing = await prisma.influencer_requests.findUnique({
+      where: { user_id: user.id },
+      select: { id: true },
     });
-    // Mirror the request into MySQL (the influencer status route reads it there).
-    try {
-      const { mirrorInfluencerRequestIntoMysql } = await import("@/lib/data/influencer");
-      await mirrorInfluencerRequestIntoMysql(sb, user.id);
-    } catch (e) {
-      console.error("[start] influencer request MySQL mirror failed:", e);
+    if (!existing) {
+      await prisma.influencer_requests.create({
+        data: {
+          id: randomUUID(),
+          user_id: user.id,
+          handle: null,
+          note: null,
+          social: {},
+          status: "pending",
+        },
+      });
     }
   } catch (e) {
-    // Ignore errors like "already approved" — the portal gate decides.
-    console.error("[start] request_influencer failed (continuing to portal):", e);
+    // Ignore errors like a duplicate race — the portal gate decides.
+    console.error("[start] influencer request failed (continuing to portal):", e);
   }
 
   const to = new URL("/influencer", req.url);

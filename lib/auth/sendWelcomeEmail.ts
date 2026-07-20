@@ -12,7 +12,6 @@
 // storefront where country-aware pricing + currency rendering happen
 // natively, avoiding stale FX rates in a long-lived email.
 
-import { createServiceClient } from "@/lib/supabaseServer";
 import { sendEmail } from "@/lib/ses";
 import { getEmailTranslator } from "@/lib/i18n/email";
 import { resolveMediaUrl } from "@/lib/storage/backend";
@@ -43,14 +42,13 @@ type TrendingProduct = {
 
 async function fetchTrending(): Promise<TrendingProduct[]> {
   try {
-    const sb = createServiceClient();
-    const { data } = await sb
-      .from("products")
-      .select("id, slug, name, hero_image_path, is_trending, is_published")
-      .eq("is_published", true)
-      .eq("is_trending", true)
-      .limit(MAX_TRENDING);
-    return ((data ?? []) as any[]).map((p) => ({
+    const { prisma } = await import("@/lib/db/prisma");
+    const data = await prisma.products.findMany({
+      where: { is_published: true, is_trending: true },
+      select: { id: true, slug: true, name: true, hero_image_path: true },
+      take: MAX_TRENDING,
+    });
+    return data.map((p) => ({
       id: p.id,
       slug: p.slug,
       name: p.name,

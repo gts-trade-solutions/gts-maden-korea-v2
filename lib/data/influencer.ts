@@ -161,59 +161,11 @@ const PROMO_FIELDS =
   "id, influencer_id, code, product_id, discount_percent, commission_percent, cap_percent, " +
   "starts_at, expires_at, max_uses, uses, active, created_at, scope";
 
-export async function mirrorPromoIntoMysql(sb: any, promoId: string): Promise<void> {
-  const { data: p } = await sb.from("promo_codes").select(PROMO_FIELDS).eq("id", promoId).maybeSingle();
-  if (!p) return;
-  const data: any = {
-    id: p.id,
-    influencer_id: p.influencer_id,
-    code: p.code,
-    product_id: p.product_id ?? null,
-    discount_percent: p.discount_percent ?? 0,
-    commission_percent: p.commission_percent ?? 0,
-    cap_percent: p.cap_percent ?? 0,
-    starts_at: p.starts_at ? new Date(p.starts_at) : null,
-    expires_at: p.expires_at ? new Date(p.expires_at) : null,
-    max_uses: p.max_uses ?? null,
-    uses: p.uses ?? 0,
-    active: p.active ?? true,
-    scope: p.scope ?? "global",
-    ...(p.created_at ? { created_at: new Date(p.created_at) } : {}),
-  };
-  await prisma.promo_codes.upsert({ where: { id: p.id }, update: data, create: data });
-}
 
 export async function deletePromoFromMysql(promoId: string): Promise<void> {
   await prisma.promo_codes.deleteMany({ where: { id: promoId } });
 }
 
-// Mirror influencer_profiles editable fields into MySQL after a self-serve
-// write (wallet save, display-currency change). Re-reads the authoritative
-// Supabase row and updates the (migrated) MySQL row. Best-effort caller.
-export async function mirrorInfluencerProfileIntoMysql(sb: any, userId: string): Promise<void> {
-  const { data: p } = await sb
-    .from("influencer_profiles")
-    .select(
-      "payout_meta, display_currency, display_name, active, applicable_countries, commission_cap_pct, default_user_discount_pct"
-    )
-    .eq("user_id", userId)
-    .maybeSingle();
-  if (!p) return;
-  await prisma.influencer_profiles.update({
-    where: { user_id: userId },
-    data: {
-      payout_meta: p.payout_meta ?? {},
-      display_currency: p.display_currency ?? "INR",
-      display_name: p.display_name ?? null,
-      active: p.active ?? true,
-      applicable_countries: p.applicable_countries ?? [],
-      ...(p.commission_cap_pct != null ? { commission_cap_pct: Number(p.commission_cap_pct) } : {}),
-      ...(p.default_user_discount_pct != null
-        ? { default_user_discount_pct: Number(p.default_user_discount_pct) }
-        : {}),
-    },
-  });
-}
 
 // Mirror a payout request into MySQL (read by summary + payouts). The dashboard
 // "available to withdraw" + pending list read MySQL, so a Supabase-only payout
@@ -222,55 +174,7 @@ const PAYOUT_FIELDS =
   "id, influencer_id, amount, currency, covering_orders, status, notes, created_at, paid_at, " +
   "method, request_note, contact_email, settled_reference";
 
-export async function mirrorPayoutIntoMysql(sb: any, payoutId: string): Promise<void> {
-  const { data: p } = await sb.from("influencer_payouts").select(PAYOUT_FIELDS).eq("id", payoutId).maybeSingle();
-  if (!p) return;
-  const data: any = {
-    id: p.id,
-    influencer_id: p.influencer_id,
-    amount: p.amount ?? 0,
-    currency: p.currency ?? "INR",
-    covering_orders: p.covering_orders ?? [],
-    status: p.status ?? "initiated",
-    notes: p.notes ?? null,
-    paid_at: p.paid_at ? new Date(p.paid_at) : null,
-    method: p.method ?? "manual",
-    request_note: p.request_note ?? null,
-    contact_email: p.contact_email ?? null,
-    settled_reference: p.settled_reference ?? null,
-    ...(p.created_at ? { created_at: new Date(p.created_at) } : {}),
-  };
-  await prisma.influencer_payouts.upsert({ where: { id: p.id }, update: data, create: data });
-}
 
-// Mirror the user's latest influencer application into MySQL (read by status).
-// MySQL enforces one request per user (unique user_id), so we replace any
-// existing row with the freshest Supabase row.
-export async function mirrorInfluencerRequestIntoMysql(sb: any, userId: string): Promise<void> {
-  const { data: r } = await sb
-    .from("influencer_requests")
-    .select("id, user_id, handle, social, note, status, reviewed_by, reviewed_at, created_at, updated_at")
-    .eq("user_id", userId)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (!r) return;
-  await prisma.influencer_requests.deleteMany({ where: { user_id: userId } });
-  await prisma.influencer_requests.create({
-    data: {
-      id: r.id,
-      user_id: r.user_id,
-      handle: r.handle ?? null,
-      social: r.social ?? {},
-      note: r.note ?? null,
-      status: r.status ?? "pending",
-      reviewed_by: r.reviewed_by ?? null,
-      reviewed_at: r.reviewed_at ? new Date(r.reviewed_at) : null,
-      ...(r.created_at ? { created_at: new Date(r.created_at) } : {}),
-      ...(r.updated_at ? { updated_at: new Date(r.updated_at) } : {}),
-    },
-  });
-}
 
 // /api/influencer/status — admin / influencer / pending / rejected / none.
 export async function getInfluencerStatusMysql(

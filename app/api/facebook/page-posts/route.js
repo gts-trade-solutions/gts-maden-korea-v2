@@ -1,33 +1,37 @@
 // app/api/facebook/page-posts/route.js
 import { NextResponse } from "next/server";
-import { getAdminSupabase, ADMIN_OWNER_ID } from "@/lib/adminSupabase";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
+import { upsertMetaRows } from "@/lib/data/meta";
+import { ADMIN_OWNER_ID } from "@/lib/adminOwner";
 
 const GRAPH_BASE = "https://graph.facebook.com/v21.0";
 
 // 🔹 GET = fetch latest posts, cache, return
 export async function GET() {
   try {
-    const supabase = getAdminSupabase();
-
     if (!ADMIN_OWNER_ID) {
       return NextResponse.json(
         {
           error:
-            "ADMIN_OWNER_ID / FB_OWNER_ID env not set. Please set FB_OWNER_ID to a Supabase user UUID.",
+            "ADMIN_OWNER_ID / FB_OWNER_ID env not set. Please set FB_OWNER_ID to the owner user UUID.",
         },
         { status: 400 }
       );
     }
 
     // 1️⃣ Get page + token for admin owner
-    const { data: account, error: accError } = await supabase
-      .from("instagram_accounts")
-      .select("id, facebook_page_id, page_access_token, created_at")
-      .eq("owner_id", ADMIN_OWNER_ID)
-      .eq("is_active", true)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    let account = null;
+    let accError = null;
+    try {
+      account = await prisma.instagram_accounts.findFirst({
+        where: { owner_id: ADMIN_OWNER_ID, is_active: true },
+        select: { id: true, facebook_page_id: true, page_access_token: true, created_at: true },
+        orderBy: { created_at: "desc" },
+      });
+    } catch (e) {
+      accError = e;
+    }
 
     if (accError) {
       console.error("instagram_accounts error:", accError);
@@ -151,31 +155,28 @@ export async function GET() {
         comments_count: p.comments?.summary?.total_count ?? null,
       }));
 
-      const { error: upsertError } = await supabase
-        .from("facebook_page_posts")
-        .upsert(records, {
-          onConflict: "owner_id,fb_post_id",
-        });
-
-      if (upsertError) {
+      try {
+        await upsertMetaRows(prisma.facebook_page_posts, records, (r) => ({
+          owner_id_fb_post_id: { owner_id: r.owner_id, fb_post_id: r.fb_post_id },
+        }));
+      } catch (upsertError) {
         console.error("Upsert error facebook_page_posts:", upsertError);
       }
     }
 
     // 5️⃣ Read from DB
-    const { data: cachedPosts, error: cachedError } = await supabase
-      .from("facebook_page_posts")
-      .select(
-        "id, fb_post_id, message, permalink_url, created_time, attachments, insights, reactions_count, comments_count"
-      )
-      .eq("owner_id", ADMIN_OWNER_ID)
-      .eq("facebook_page_id", pageId)
-      .order("created_time", { ascending: false })
-      .limit(20);
+    const cachedPosts = await prisma.facebook_page_posts.findMany({
+      where: { owner_id: ADMIN_OWNER_ID, facebook_page_id: pageId },
+      select: {
+        id: true, fb_post_id: true, message: true, permalink_url: true,
+        created_time: true, attachments: true, insights: true,
+        reactions_count: true, comments_count: true,
+      },
+      orderBy: { created_time: "desc" },
+      take: 20,
+    });
 
-    if (cachedError) throw cachedError;
-
-    return NextResponse.json({ data: cachedPosts }, { status: 200 });
+    return NextResponse.json({ data: jsonSafe(cachedPosts) }, { status: 200 });
   } catch (err) {
     console.error("GET /api/facebook/page-posts error", err);
     return NextResponse.json(
@@ -187,13 +188,11 @@ export async function GET() {
 
 export async function POST(req) {
   try {
-    const supabase = getAdminSupabase();
-
     if (!ADMIN_OWNER_ID) {
       return NextResponse.json(
         {
           error:
-            "ADMIN_OWNER_ID / FB_OWNER_ID env not set. Please set FB_OWNER_ID to a Supabase user UUID.",
+            "ADMIN_OWNER_ID / FB_OWNER_ID env not set. Please set FB_OWNER_ID to the owner user UUID.",
         },
         { status: 400 }
       );
@@ -211,12 +210,12 @@ export async function POST(req) {
     }
 
     // 1️⃣ Get page + page_access_token
-    const { data: account, error: accError } = await supabase
-      .from("instagram_accounts")
-      .select("facebook_page_id, page_access_token")
-      .eq("owner_id", ADMIN_OWNER_ID)
-      .eq("is_active", true)
-      .single();
+    const account = await prisma.instagram_accounts.findFirst({
+      where: { owner_id: ADMIN_OWNER_ID, is_active: true },
+      select: { facebook_page_id: true, page_access_token: true },
+      orderBy: { created_at: "desc" },
+    });
+    const accError = account ? null : new Error("No active instagram account");
 
     if (accError) {
       console.error("No instagram_accounts row", accError);
@@ -341,13 +340,11 @@ export async function POST(req) {
       comments_count: post.comments?.summary?.total_count ?? null,
     };
 
-    const { error: upsertError } = await supabase
-      .from("facebook_page_posts")
-      .upsert(record, {
-        onConflict: "owner_id,fb_post_id",
-      });
-
-    if (upsertError) {
+    try {
+      await upsertMetaRows(prisma.facebook_page_posts, [record], (r) => ({
+        owner_id_fb_post_id: { owner_id: r.owner_id, fb_post_id: r.fb_post_id },
+      }));
+    } catch (upsertError) {
       console.error("Upsert error facebook_page_posts:", upsertError);
     }
 
@@ -363,13 +360,11 @@ export async function POST(req) {
 
 export async function PATCH(req) {
   try {
-    const supabase = getAdminSupabase();
-
     if (!ADMIN_OWNER_ID) {
       return NextResponse.json(
         {
           error:
-            "ADMIN_OWNER_ID / FB_OWNER_ID env not set. Please set FB_OWNER_ID to a Supabase user UUID.",
+            "ADMIN_OWNER_ID / FB_OWNER_ID env not set. Please set FB_OWNER_ID to the owner user UUID.",
         },
         { status: 400 }
       );
@@ -392,12 +387,12 @@ export async function PATCH(req) {
       );
     }
 
-    const { data: account, error: accError } = await supabase
-      .from("instagram_accounts")
-      .select("page_access_token")
-      .eq("owner_id", ADMIN_OWNER_ID)
-      .eq("is_active", true)
-      .single();
+    const account = await prisma.instagram_accounts.findFirst({
+      where: { owner_id: ADMIN_OWNER_ID, is_active: true },
+      select: { page_access_token: true },
+      orderBy: { created_at: "desc" },
+    });
+    const accError = account ? null : new Error("No active instagram account");
 
     if (accError) {
       console.error("No instagram_accounts row", accError);
@@ -443,20 +438,16 @@ export async function PATCH(req) {
       );
     }
 
-    const { data: updated, error: updateError } = await supabase
-      .from("facebook_page_posts")
-      .update({
-        message,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("owner_id", ADMIN_OWNER_ID)
-      .eq("fb_post_id", fbPostId)
-      .select("id, fb_post_id, message, permalink_url, created_time")
-      .single();
+    await prisma.facebook_page_posts.updateMany({
+      where: { owner_id: ADMIN_OWNER_ID, fb_post_id: fbPostId },
+      data: { message, updated_at: new Date() },
+    });
+    const updated = await prisma.facebook_page_posts.findFirst({
+      where: { owner_id: ADMIN_OWNER_ID, fb_post_id: fbPostId },
+      select: { id: true, fb_post_id: true, message: true, permalink_url: true, created_time: true },
+    });
 
-    if (updateError) throw updateError;
-
-    return NextResponse.json({ data: updated }, { status: 200 });
+    return NextResponse.json({ data: jsonSafe(updated) }, { status: 200 });
   } catch (err) {
     console.error("PATCH /api/facebook/page-posts error", err);
     return NextResponse.json(
@@ -468,13 +459,11 @@ export async function PATCH(req) {
 
 export async function DELETE(req) {
   try {
-    const supabase = getAdminSupabase();
-
     if (!ADMIN_OWNER_ID) {
       return NextResponse.json(
         {
           error:
-            "ADMIN_OWNER_ID / FB_OWNER_ID env not set. Please set FB_OWNER_ID to a Supabase user UUID.",
+            "ADMIN_OWNER_ID / FB_OWNER_ID env not set. Please set FB_OWNER_ID to the owner user UUID.",
         },
         { status: 400 }
       );
@@ -490,12 +479,12 @@ export async function DELETE(req) {
       );
     }
 
-    const { data: account, error: accError } = await supabase
-      .from("instagram_accounts")
-      .select("page_access_token")
-      .eq("owner_id", ADMIN_OWNER_ID)
-      .eq("is_active", true)
-      .single();
+    const account = await prisma.instagram_accounts.findFirst({
+      where: { owner_id: ADMIN_OWNER_ID, is_active: true },
+      select: { page_access_token: true },
+      orderBy: { created_at: "desc" },
+    });
+    const accError = account ? null : new Error("No active instagram account");
 
     if (accError) {
       console.error("No instagram_accounts row", accError);
@@ -536,13 +525,9 @@ export async function DELETE(req) {
     }
 
     // Delete from cache
-    const { error: deleteError } = await supabase
-      .from("facebook_page_posts")
-      .delete()
-      .eq("owner_id", ADMIN_OWNER_ID)
-      .eq("fb_post_id", fbPostId);
-
-    if (deleteError) throw deleteError;
+    await prisma.facebook_page_posts.deleteMany({
+      where: { owner_id: ADMIN_OWNER_ID, fb_post_id: fbPostId },
+    });
 
     return NextResponse.json({ success: true }, { status: 200 });
   } catch (err) {

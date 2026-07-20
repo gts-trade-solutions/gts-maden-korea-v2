@@ -1,49 +1,33 @@
 // app/api/facebook/comments/route.js
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
+import { upsertMetaRows } from "@/lib/data/meta";
 
 const GRAPH_BASE = "https://graph.facebook.com/v21.0";
 
 // Optional: lock everything to one admin owner
 const ADMIN_OWNER_ID = process.env.FB_OWNER_ID || null;
 
-function getAdminSupabase() {
-  if (
-    !process.env.NEXT_PUBLIC_SUPABASE_URL ||
-    !process.env.SUPABASE_SERVICE_ROLE_KEY
-  ) {
-    throw new Error(
-      "Supabase URL or SERVICE_ROLE key missing in environment variables"
-    );
-  }
-
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY,
-    {
-      auth: { persistSession: false },
-    }
-  );
-}
-
 /**
  * Load Facebook Page config from instagram_accounts
  * Uses latest active row (optionally filtered by ADMIN_OWNER_ID)
  */
-async function getFacebookConfigAdmin(supabase) {
-  let query = supabase
-    .from("instagram_accounts")
-    .select("id, owner_id, facebook_page_id, page_access_token")
-    .eq("is_active", true)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (ADMIN_OWNER_ID) {
-    query = query.eq("owner_id", ADMIN_OWNER_ID);
+async function getFacebookConfigAdmin() {
+  let account = null;
+  let accError = null;
+  try {
+    account = await prisma.instagram_accounts.findFirst({
+      where: {
+        is_active: true,
+        ...(ADMIN_OWNER_ID ? { owner_id: ADMIN_OWNER_ID } : {}),
+      },
+      select: { id: true, owner_id: true, facebook_page_id: true, page_access_token: true },
+      orderBy: { created_at: "desc" },
+    });
+  } catch (e) {
+    accError = e;
   }
-
-  const { data: account, error: accError } = await query;
 
   if (accError) {
     console.error("instagram_accounts error:", accError);
@@ -75,7 +59,6 @@ async function getFacebookConfigAdmin(supabase) {
  */
 export async function GET(req) {
   try {
-    const supabase = getAdminSupabase();
     const { searchParams } = new URL(req.url);
     const fbPostId = searchParams.get("fb_post_id");
 
@@ -86,9 +69,7 @@ export async function GET(req) {
       );
     }
 
-    const { ownerId, pageId, pageToken } = await getFacebookConfigAdmin(
-      supabase
-    );
+    const { ownerId, pageId, pageToken } = await getFacebookConfigAdmin();
 
     // 1️⃣ Fetch comments from Graph API
     const commentsUrl = `${GRAPH_BASE}/${encodeURIComponent(
@@ -134,30 +115,27 @@ export async function GET(req) {
         is_hidden: c.is_hidden ?? null,
       }));
 
-      const { error: upsertError } = await supabase
-        .from("facebook_page_comments")
-        .upsert(records, {
-          onConflict: "owner_id,fb_comment_id",
-        });
-
-      if (upsertError) {
+      try {
+        await upsertMetaRows(prisma.facebook_page_comments, records, (r) => ({
+          owner_id_fb_comment_id: { owner_id: r.owner_id, fb_comment_id: r.fb_comment_id },
+        }));
+      } catch (upsertError) {
         console.error("Upsert facebook_page_comments error:", upsertError);
       }
     }
 
     // 3️⃣ Read from DB and return
-    const { data: cached, error: cachedError } = await supabase
-      .from("facebook_page_comments")
-      .select(
-        "id, fb_comment_id, fb_post_id, message, from_name, from_id, created_time, like_count, comment_count, is_hidden"
-      )
-      .eq("owner_id", ownerId)
-      .eq("fb_post_id", fbPostId)
-      .order("created_time", { ascending: false });
+    const cached = await prisma.facebook_page_comments.findMany({
+      where: { owner_id: ownerId, fb_post_id: fbPostId },
+      select: {
+        id: true, fb_comment_id: true, fb_post_id: true, message: true,
+        from_name: true, from_id: true, created_time: true,
+        like_count: true, comment_count: true, is_hidden: true,
+      },
+      orderBy: { created_time: "desc" },
+    });
 
-    if (cachedError) throw cachedError;
-
-    return NextResponse.json({ data: cached }, { status: 200 });
+    return NextResponse.json({ data: jsonSafe(cached) }, { status: 200 });
   } catch (err) {
     console.error("GET /api/facebook/comments error", err);
     return NextResponse.json(
@@ -174,10 +152,7 @@ export async function GET(req) {
  */
 export async function POST(req) {
   try {
-    const supabase = getAdminSupabase();
-    const { ownerId, pageId, pageToken } = await getFacebookConfigAdmin(
-      supabase
-    );
+    const { ownerId, pageId, pageToken } = await getFacebookConfigAdmin();
 
     const body = await req.json();
     const fbPostId = body.fb_post_id || null;
@@ -262,11 +237,14 @@ export async function POST(req) {
       is_hidden: c.is_hidden ?? null,
     };
 
-    const { error: upsertError } = await supabase
-      .from("facebook_page_comments")
-      .upsert(record, {
-        onConflict: "owner_id,fb_comment_id",
-      });
+    let upsertError = null;
+    try {
+      await upsertMetaRows(prisma.facebook_page_comments, [record], (r) => ({
+        owner_id_fb_comment_id: { owner_id: r.owner_id, fb_comment_id: r.fb_comment_id },
+      }));
+    } catch (e) {
+      upsertError = e;
+    }
 
     if (upsertError) {
       console.error("Upsert facebook_page_comments error:", upsertError);
@@ -289,8 +267,7 @@ export async function POST(req) {
  */
 export async function PATCH(req) {
   try {
-    const supabase = getAdminSupabase();
-    const { ownerId, pageToken } = await getFacebookConfigAdmin(supabase);
+    const { ownerId, pageToken } = await getFacebookConfigAdmin();
 
     const body = await req.json();
     const fbCommentId = body.fb_comment_id;
@@ -339,19 +316,20 @@ export async function PATCH(req) {
     }
 
     // 2️⃣ Update cached record
-    const { data: updated, error: updateError } = await supabase
-      .from("facebook_page_comments")
-      .update({ is_hidden: isHidden })
-      .eq("owner_id", ownerId)
-      .eq("fb_comment_id", fbCommentId)
-      .select(
-        "id, fb_comment_id, fb_post_id, message, from_name, from_id, created_time, like_count, comment_count, is_hidden"
-      )
-      .single();
+    await prisma.facebook_page_comments.updateMany({
+      where: { owner_id: ownerId, fb_comment_id: fbCommentId },
+      data: { is_hidden: isHidden },
+    });
+    const updated = await prisma.facebook_page_comments.findFirst({
+      where: { owner_id: ownerId, fb_comment_id: fbCommentId },
+      select: {
+        id: true, fb_comment_id: true, fb_post_id: true, message: true,
+        from_name: true, from_id: true, created_time: true,
+        like_count: true, comment_count: true, is_hidden: true,
+      },
+    });
 
-    if (updateError) throw updateError;
-
-    return NextResponse.json({ data: updated }, { status: 200 });
+    return NextResponse.json({ data: jsonSafe(updated) }, { status: 200 });
   } catch (err) {
     console.error("PATCH /api/facebook/comments error", err);
     return NextResponse.json(
@@ -367,8 +345,7 @@ export async function PATCH(req) {
  */
 export async function DELETE(req) {
   try {
-    const supabase = getAdminSupabase();
-    const { ownerId, pageToken } = await getFacebookConfigAdmin(supabase);
+    const { ownerId, pageToken } = await getFacebookConfigAdmin();
 
     const { searchParams } = new URL(req.url);
     const fbCommentId = searchParams.get("fb_comment_id");
@@ -402,13 +379,9 @@ export async function DELETE(req) {
     }
 
     // 2️⃣ Remove from DB cache
-    const { error: deleteError } = await supabase
-      .from("facebook_page_comments")
-      .delete()
-      .eq("owner_id", ownerId)
-      .eq("fb_comment_id", fbCommentId);
-
-    if (deleteError) throw deleteError;
+    await prisma.facebook_page_comments.deleteMany({
+      where: { owner_id: ownerId, fb_comment_id: fbCommentId },
+    });
 
     return NextResponse.json({ success: true }, { status: 200 });
   } catch (err) {

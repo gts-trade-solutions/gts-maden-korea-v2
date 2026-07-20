@@ -1,17 +1,8 @@
 // /lib/contexts/AuthContext.tsx
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { useSession, signIn, signOut } from "next-auth/react";
-import { supabase } from "@/lib/supabaseClient";
-import { isSupportedLocale, type SupportedLocale } from "@/lib/locales";
-import { COUNTRY_PROFILES, isSupportedCountry, type CountryCode } from "@/lib/countries";
-import { isSupportedCurrency } from "@/lib/currency";
-
-// Client-side auth-backend flag. Mirrors the server AUTH_BACKEND so the client
-// flips at the same moment. Unset (default) = Supabase = current behavior; the
-// NextAuth branches below only activate when this is "nextauth" (Step E).
-const NEXTAUTH = process.env.NEXT_PUBLIC_AUTH_BACKEND === "nextauth";
 
 type UserRole = "customer" | "admin" | "super_admin";
 
@@ -21,10 +12,9 @@ type SessionUser = {
   full_name?: string | null;
   avatar_url?: string | null;
   role?: UserRole;
-  // `preferred_country` is read from public.profiles. When it's
-  // null/missing for an authenticated user, the storefront's
-  // <CountryGate> blocks the UI behind a country-picker modal so we
-  // never have a logged-in user without a known country.
+  // `preferred_country` is read from the profile. When it's null/missing for an
+  // authenticated user, the storefront's <CountryGate> blocks the UI behind a
+  // country-picker modal so we never have a logged-in user without a country.
   preferred_country?: string | null;
 };
 
@@ -50,135 +40,16 @@ type AuthContextType = {
 
 const AuthContext = createContext<AuthContextType>({} as any);
 
-// ──────────────────────────────────────────────────────────────
-// Preference sync: cookies ↔ profile.preferred_locale/country.
-//
-// The cookies (`mik_locale`, `mik_country`, `mik_currency`) are the
-// per-device source of truth. We mirror locale + country to the
-// profile so a fresh browser sign-in can restore the same UI/region
-// the user picked elsewhere. Currency follows from country, so it's
-// derived (not stored).
-// ──────────────────────────────────────────────────────────────
-const COOKIE_MAX_AGE_DAYS = 365;
-function readCookie(name: string): string | null {
-  if (typeof document === "undefined") return null;
-  const match = document.cookie
-    .split("; ")
-    .find((row) => row.startsWith(`${name}=`));
-  return match ? decodeURIComponent(match.split("=")[1] ?? "") : null;
-}
-function writeCookie(name: string, value: string) {
-  if (typeof document === "undefined") return;
-  const maxAge = COOKIE_MAX_AGE_DAYS * 24 * 60 * 60;
-  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; max-age=${maxAge}; SameSite=Lax`;
-}
-
-/**
- * On sign-in: if the user's profile has preferred_locale /
- * preferred_country saved, write them through to the cookies so the
- * UI follows the user across devices. If the profile is empty (new
- * user or pre-feature account), seed it from the current cookies.
- *
- * Triggers a full reload when cookies change, because LocaleProvider
- * + CurrencyProvider snapshot the cookie at SSR time and won't pick
- * up a mid-session change otherwise.
- */
-async function syncPreferencesOnLogin(userId: string) {
-  try {
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("preferred_locale, preferred_country")
-      .eq("id", userId)
-      .maybeSingle();
-
-    const cookieLocale = readCookie("mik_locale");
-    const cookieCountry = readCookie("mik_country");
-    const cookieCurrency = readCookie("mik_currency");
-
-    const savedLocale = profile?.preferred_locale;
-    const savedCountry = profile?.preferred_country;
-
-    let cookieChanged = false;
-
-    if (savedLocale && isSupportedLocale(savedLocale)) {
-      if (cookieLocale !== savedLocale) {
-        writeCookie("mik_locale", savedLocale);
-        cookieChanged = true;
-      }
-    } else if (cookieLocale && isSupportedLocale(cookieLocale)) {
-      // Profile empty → seed it from cookie (one-time backfill).
-      await supabase
-        .from("profiles")
-        .update({ preferred_locale: cookieLocale })
-        .eq("id", userId);
-    }
-
-    if (savedCountry && isSupportedCountry(savedCountry)) {
-      if (cookieCountry !== savedCountry) {
-        writeCookie("mik_country", savedCountry);
-        // Cascade currency from country profile when restoring across
-        // devices — otherwise a user signing in on a new device might
-        // see Polish UI but INR prices.
-        const newCurrency = COUNTRY_PROFILES[savedCountry as CountryCode].defaultCurrency;
-        if (cookieCurrency !== newCurrency) {
-          writeCookie("mik_currency", newCurrency);
-        }
-        cookieChanged = true;
-      }
-    }
-    // The old "profile empty → backfill from cookie" branch for
-    // preferred_country was removed when the CountryGate landed. Now
-    // any user with a null preferred_country is intentionally being
-    // asked to pick one explicitly via the modal — silently filling
-    // in their (geo-detected, potentially wrong) cookie value behind
-    // their back would defeat the gate's whole purpose. The signup
-    // form and the gate are the only two places that write
-    // preferred_country going forward.
-
-    if (cookieChanged && typeof window !== "undefined") {
-      // Full reload so SSR re-reads the cookies and providers pick up
-      // the new values. Cheaper than threading a "rehydrate" path
-      // through every provider.
-      window.location.reload();
-    }
-  } catch {
-    // Best-effort — never block sign-in on a preferences sync failure.
-  }
-}
-
-/**
- * On signup: take whatever cookies the visitor's session has now and
- * write them to the new profile so subsequent sign-ins elsewhere
- * restore the same setup. Cookies are guaranteed present because
- * middleware seeds them on first visit.
- */
-async function seedProfilePreferences(userId: string) {
-  try {
-    const cookieLocale = readCookie("mik_locale");
-    const cookieCountry = readCookie("mik_country");
-    const updates: Record<string, string> = {};
-    if (cookieLocale && isSupportedLocale(cookieLocale)) {
-      updates.preferred_locale = cookieLocale;
-    }
-    if (cookieCountry && isSupportedCountry(cookieCountry)) {
-      updates.preferred_country = cookieCountry;
-    }
-    if (Object.keys(updates).length === 0) return;
-    await supabase.from("profiles").update(updates).eq("id", userId);
-  } catch {}
-}
-
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [ready, setReady] = useState(false);
-  const loadPromiseRef = useRef<Promise<void> | null>(null);
 
-  // NextAuth session — only consumed when NEXTAUTH. Safe to call always; the
-  // app is wrapped in NextAuthProvider's SessionProvider.
+  // The app is wrapped in NextAuthProvider's SessionProvider.
   const { data: naSession, status: naStatus } = useSession();
 
-  // NextAuth hydration: id/email/role from the session (role is carried in the
-  // JWT, Step B); name/avatar/preferred_country from /api/me/profile (MySQL).
+  // Identity hydration: id/email/role come from the NextAuth session (role is
+  // carried in the JWT, set at sign-in); name/avatar/preferred_country come
+  // from /api/me/profile (MySQL).
   async function hydrateFromNextAuth(naUser: any) {
     if (!naUser) {
       setUser(null);
@@ -202,70 +73,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
   }
 
-  async function hydrateFromSession(authed: any) {
-    if (!authed) {
-      setUser(null);
-      return;
-    }
-
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("full_name, avatar_url, role, preferred_country")
-      .eq("id", authed.id)
-      .maybeSingle();
-
-    setUser({
-      id: authed.id,
-      email: authed.email,
-      full_name: profile?.full_name ?? authed.user_metadata?.full_name ?? null,
-      avatar_url:
-        profile?.avatar_url ?? authed.user_metadata?.avatar_url ?? null,
-      role: (profile?.role as UserRole) ?? "customer",
-      preferred_country: profile?.preferred_country ?? null,
-    });
-  }
-
-  async function loadFromSession() {
-    if (loadPromiseRef.current) return loadPromiseRef.current;
-
-    loadPromiseRef.current = (async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      await hydrateFromSession(session?.user ?? null);
-    })().finally(() => {
-      loadPromiseRef.current = null;
-    });
-
-    return loadPromiseRef.current;
-  }
-
-  // Supabase-mode identity (current). Skipped entirely under NextAuth.
+  // Reacts to the NextAuth session resolving.
   useEffect(() => {
-    if (NEXTAUTH) return;
-    let mounted = true;
-    (async () => {
-      await loadFromSession();
-      if (mounted) setReady(true);
-    })();
-
-    const { data: sub } = supabase.auth.onAuthStateChange((_evt, session) => {
-      const run = async () => {
-        await hydrateFromSession(session?.user ?? null);
-        setReady(true);
-      };
-      run();
-    });
-
-    return () => {
-      mounted = false;
-      sub.subscription.unsubscribe();
-    };
-  }, []);
-
-  // NextAuth-mode identity. Reacts to the NextAuth session resolving.
-  useEffect(() => {
-    if (!NEXTAUTH) return;
     if (naStatus === "loading") return;
     let mounted = true;
     (async () => {
@@ -283,27 +92,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [naStatus, (naSession?.user as any)?.id]);
 
   const login = async (c: { email: string; password: string }) => {
-    if (NEXTAUTH) {
-      const res = await signIn("credentials", {
-        email: c.email,
-        password: c.password,
-        redirect: false,
-      });
-      if (res?.error) throw new Error("Invalid email or password");
-      // useSession updates reactively; the NextAuth effect re-hydrates.
-      setReady(true);
-      return;
-    }
-    const { data, error } = await supabase.auth.signInWithPassword(c);
-    if (error) throw error;
-    await loadFromSession();
+    const res = await signIn("credentials", {
+      email: c.email,
+      password: c.password,
+      redirect: false,
+    });
+    if (res?.error) throw new Error("Invalid email or password");
+    // useSession updates reactively; the effect above re-hydrates.
     setReady(true);
-    // Mirror saved profile preferences into the cookies for this
-    // browser. May trigger a reload if the saved values differ from
-    // current cookies — that's intentional so SSR picks them up.
-    if (data?.user?.id) {
-      await syncPreferencesOnLogin(data.user.id);
-    }
   };
 
   const register = async (r: {
@@ -311,11 +107,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     email: string;
     password: string;
   }) => {
-    // Dual-write registration (transition period): the server route creates
-    // the account in BOTH Supabase Auth (keeps the vendor app working) and
-    // MySQL auth_users + profiles with the same id. We then sign in to
-    // establish the Supabase session, exactly as signUp used to. This ensures
-    // users registering now can log in via NextAuth after the auth flip.
+    // The server route creates the account in MySQL (auth_users + profiles)
+    // and stamps the email-verification grace clock; we then sign in to
+    // establish the NextAuth session.
     const res = await fetch("/api/auth/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -337,30 +131,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       );
     }
 
-    if (NEXTAUTH) {
-      const si = await signIn("credentials", {
-        email: r.email,
-        password: r.password,
-        redirect: false,
-      });
-      if (si?.error) {
-        throw new Error("Registered, but sign-in failed — please log in.");
-      }
-      setReady(true);
-      return;
-    }
-    const { error } = await supabase.auth.signInWithPassword({
+    const si = await signIn("credentials", {
       email: r.email,
       password: r.password,
+      redirect: false,
     });
-    if (error) throw error;
-    await loadFromSession();
-    setReady(true);
-    // Persist the visitor's already-chosen locale/country to the new
-    // profile so future sign-ins on other devices restore the setup.
-    if (j?.id) {
-      await seedProfilePreferences(j.id);
+    if (si?.error) {
+      throw new Error("Registered, but sign-in failed — please log in.");
     }
+    setReady(true);
   };
 
   const logout = async () => {
@@ -370,21 +149,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const { trackEvent } = await import("@/lib/analytics/track");
       trackEvent("logout", {}, { immediate: true });
     } catch {}
-    if (NEXTAUTH) {
-      await signOut({ redirect: false });
-    } else {
-      await supabase.auth.signOut();
-    }
+    await signOut({ redirect: false });
     setUser(null);
     setReady(true);
   };
 
   const refreshProfile = async () => {
-    if (NEXTAUTH) {
-      if (naSession?.user) await hydrateFromNextAuth(naSession.user);
-      return;
-    }
-    await loadFromSession();
+    if (naSession?.user) await hydrateFromNextAuth(naSession.user);
   };
 
   // Super admin is a strict superset of admin — every check gated on

@@ -1,46 +1,31 @@
 // app/api/instagram/comments/route.js
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
+import { upsertMetaRows } from "@/lib/data/meta";
 
 const GRAPH_BASE = "https://graph.facebook.com/v21.0";
 const ADMIN_OWNER_ID = process.env.FB_OWNER_ID || null;
 
-function getAdminSupabase() {
-  if (
-    !process.env.NEXT_PUBLIC_SUPABASE_URL ||
-    !process.env.SUPABASE_SERVICE_ROLE_KEY
-  ) {
-    throw new Error(
-      "Supabase URL or SERVICE_ROLE key missing in environment variables"
-    );
-  }
-
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY,
-    {
-      auth: { persistSession: false },
-    }
-  );
-}
-
 // 🔹 Shared helper: resolve IG business account + token, using instagram_accounts
-async function resolveInstagramBusinessIdAdmin(supabase) {
-  let query = supabase
-    .from("instagram_accounts")
-    .select(
-      "id, owner_id, ig_business_account_id, facebook_page_id, access_token"
-    )
-    .eq("is_active", true)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (ADMIN_OWNER_ID) {
-    query = query.eq("owner_id", ADMIN_OWNER_ID);
+async function resolveInstagramBusinessIdAdmin() {
+  let account = null;
+  let accError = null;
+  try {
+    account = await prisma.instagram_accounts.findFirst({
+      where: {
+        is_active: true,
+        ...(ADMIN_OWNER_ID ? { owner_id: ADMIN_OWNER_ID } : {}),
+      },
+      select: {
+        id: true, owner_id: true, ig_business_account_id: true,
+        facebook_page_id: true, access_token: true,
+      },
+      orderBy: { created_at: "desc" },
+    });
+  } catch (e) {
+    accError = e;
   }
-
-  const { data: account, error: accError } = await query;
 
   if (accError) {
     console.error("instagram_accounts error:", accError);
@@ -100,10 +85,15 @@ async function resolveInstagramBusinessIdAdmin(supabase) {
 
     igId = newIgId;
 
-    const { error: updateError } = await supabase
-      .from("instagram_accounts")
-      .update({ ig_business_account_id: igId })
-      .eq("id", account.id);
+    let updateError = null;
+    try {
+      await prisma.instagram_accounts.update({
+        where: { id: account.id },
+        data: { ig_business_account_id: igId },
+      });
+    } catch (e) {
+      updateError = e;
+    }
 
     if (updateError) {
       console.error(
@@ -134,7 +124,6 @@ async function resolveInstagramBusinessIdAdmin(supabase) {
  */
 export async function GET(req) {
   try {
-    const supabase = getAdminSupabase();
     const { searchParams } = new URL(req.url);
     const igMediaId = searchParams.get("ig_media_id");
 
@@ -147,7 +136,7 @@ export async function GET(req) {
 
     let userId, igId, igToken;
     try {
-      const resolved = await resolveInstagramBusinessIdAdmin(supabase);
+      const resolved = await resolveInstagramBusinessIdAdmin();
       userId = resolved.userId;
       igId = resolved.igId;
       igToken = resolved.accessToken;
@@ -201,11 +190,14 @@ export async function GET(req) {
           : null,
       }));
 
-      const { error: upsertError } = await supabase
-        .from("instagram_comments")
-        .upsert(records, {
-          onConflict: "owner_id,ig_comment_id",
-        });
+      let upsertError = null;
+      try {
+        await upsertMetaRows(prisma.instagram_comments, records, (r) => ({
+          owner_id_ig_comment_id: { owner_id: r.owner_id, ig_comment_id: r.ig_comment_id },
+        }));
+      } catch (e) {
+        upsertError = e;
+      }
 
       if (upsertError) {
         console.error("Upsert instagram_comments error:", upsertError);
@@ -213,18 +205,16 @@ export async function GET(req) {
     }
 
     // 3️⃣ Read from DB for consistent structure
-    const { data: cached, error: cachedError } = await supabase
-      .from("instagram_comments")
-      .select(
-        "id, ig_comment_id, ig_media_id, ig_business_account_id, from_username, message, is_hidden, like_count, created_time"
-      )
-      .eq("owner_id", userId)
-      .eq("ig_media_id", igMediaId)
-      .order("created_time", { ascending: false });
+    const cached = await prisma.instagram_comments.findMany({
+      where: { owner_id: userId, ig_media_id: igMediaId },
+      select: {
+        id: true, ig_comment_id: true, ig_media_id: true, ig_business_account_id: true,
+        from_username: true, message: true, is_hidden: true, like_count: true, created_time: true,
+      },
+      orderBy: { created_time: "desc" },
+    });
 
-    if (cachedError) throw cachedError;
-
-    return NextResponse.json({ data: cached }, { status: 200 });
+    return NextResponse.json({ data: jsonSafe(cached) }, { status: 200 });
   } catch (err) {
     console.error("GET /api/instagram/comments error", err);
     return NextResponse.json(
@@ -242,7 +232,6 @@ export async function GET(req) {
  */
 export async function POST(req) {
   try {
-    const supabase = getAdminSupabase();
 
     const body = await req.json();
     const igMediaId = body.ig_media_id || null;
@@ -266,7 +255,7 @@ export async function POST(req) {
 
     let userId, igId, igToken;
     try {
-      const resolved = await resolveInstagramBusinessIdAdmin(supabase);
+      const resolved = await resolveInstagramBusinessIdAdmin();
       userId = resolved.userId;
       igId = resolved.igId;
       igToken = resolved.accessToken;
@@ -340,11 +329,14 @@ export async function POST(req) {
         : new Date().toISOString(),
     };
 
-    const { error: upsertError } = await supabase
-      .from("instagram_comments")
-      .upsert(record, {
-        onConflict: "owner_id,ig_comment_id",
-      });
+    let upsertError = null;
+    try {
+      await upsertMetaRows(prisma.instagram_comments, [record], (r) => ({
+        owner_id_ig_comment_id: { owner_id: r.owner_id, ig_comment_id: r.ig_comment_id },
+      }));
+    } catch (e) {
+      upsertError = e;
+    }
 
     if (upsertError) {
       console.error("Upsert instagram_comments error:", upsertError);
@@ -367,7 +359,6 @@ export async function POST(req) {
  */
 export async function PATCH(req) {
   try {
-    const supabase = getAdminSupabase();
 
     const body = await req.json();
     const igCommentId = body.ig_comment_id;
@@ -389,7 +380,7 @@ export async function PATCH(req) {
 
     let userId;
     try {
-      const resolved = await resolveInstagramBusinessIdAdmin(supabase);
+      const resolved = await resolveInstagramBusinessIdAdmin();
       userId = resolved.userId;
     } catch (e) {
       console.error("Error resolving IG business id (PATCH comments):", e);
@@ -400,19 +391,19 @@ export async function PATCH(req) {
     }
 
     // 🔹 Local-only flag – IG Graph doesn't hide comments like FB
-    const { data: updated, error: updateError } = await supabase
-      .from("instagram_comments")
-      .update({ is_hidden: isHidden })
-      .eq("owner_id", userId)
-      .eq("ig_comment_id", igCommentId)
-      .select(
-        "id, ig_comment_id, ig_media_id, ig_business_account_id, from_username, message, is_hidden, like_count, created_time"
-      )
-      .single();
+    await prisma.instagram_comments.updateMany({
+      where: { owner_id: userId, ig_comment_id: igCommentId },
+      data: { is_hidden: isHidden },
+    });
+    const updated = await prisma.instagram_comments.findFirst({
+      where: { owner_id: userId, ig_comment_id: igCommentId },
+      select: {
+        id: true, ig_comment_id: true, ig_media_id: true, ig_business_account_id: true,
+        from_username: true, message: true, is_hidden: true, like_count: true, created_time: true,
+      },
+    });
 
-    if (updateError) throw updateError;
-
-    return NextResponse.json({ data: updated }, { status: 200 });
+    return NextResponse.json({ data: jsonSafe(updated) }, { status: 200 });
   } catch (err) {
     console.error("PATCH /api/instagram/comments error", err);
     return NextResponse.json(
@@ -428,11 +419,10 @@ export async function PATCH(req) {
  */
 export async function DELETE(req) {
   try {
-    const supabase = getAdminSupabase();
 
     let userId, igToken;
     try {
-      const resolved = await resolveInstagramBusinessIdAdmin(supabase);
+      const resolved = await resolveInstagramBusinessIdAdmin();
       userId = resolved.userId;
       igToken = resolved.accessToken;
     } catch (e) {
@@ -475,13 +465,9 @@ export async function DELETE(req) {
     }
 
     // 2️⃣ Remove from DB cache
-    const { error: deleteError } = await supabase
-      .from("instagram_comments")
-      .delete()
-      .eq("owner_id", userId)
-      .eq("ig_comment_id", igCommentId);
-
-    if (deleteError) throw deleteError;
+    await prisma.instagram_comments.deleteMany({
+      where: { owner_id: userId, ig_comment_id: igCommentId },
+    });
 
     return NextResponse.json({ success: true }, { status: 200 });
   } catch (err) {

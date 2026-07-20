@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { useCart } from "@/lib/contexts/CartContext";
 import { useWishlist } from "@/lib/contexts/WishlistContext";
 import { useCurrency } from "@/lib/contexts/CurrencyContext";
-import { supabaseImageLoader } from "@/lib/supabaseImageLoader";
+import { mediaImageLoader } from "@/lib/mediaImageLoader";
 import { resolveMediaUrl } from "@/lib/storage/backend";
 import { toast } from "sonner";
 
@@ -259,7 +259,7 @@ export function ProductCard({ product, hideBadges = false }: ProductCardProps) {
               className="relative object-cover transition-transform duration-300 group-hover:scale-105"
               sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
               priority={false}
-              loader={supabaseImageLoader}
+              loader={mediaImageLoader}
             />
           )}
 

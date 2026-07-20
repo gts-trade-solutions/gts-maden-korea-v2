@@ -1,6 +1,8 @@
 // app/api/instagram/media/route.js
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
+import { upsertMetaRows } from "@/lib/data/meta";
 
 const GRAPH_BASE = "https://graph.facebook.com/v21.0";
 
@@ -70,32 +72,13 @@ const STATIC_IG_OWNER_ID =
   ADMIN_OWNER_ID ||
   "00000000-0000-0000-0000-000000000000";
 
-function getAdminSupabase() {
-  if (
-    !process.env.NEXT_PUBLIC_SUPABASE_URL ||
-    !process.env.SUPABASE_SERVICE_ROLE_KEY
-  ) {
-    throw new Error(
-      "Supabase URL or SERVICE_ROLE key missing in environment variables"
-    );
-  }
-
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY,
-    {
-      auth: { persistSession: false },
-    }
-  );
-}
-
 /**
  * Resolve IG Business Account ID + token
  * Priority:
  *   1) Environment variables IG_BUSINESS_ACCOUNT_ID + IG_ACCESS_TOKEN
  *   2) Latest active row in instagram_accounts (optionally filtered by ADMIN_OWNER_ID)
  */
-async function resolveInstagramBusinessIdAdmin(supabase) {
+async function resolveInstagramBusinessIdAdmin() {
   // 1️⃣ Env-vars shortcut (recommended – avoids DB + rate limits)
   if (STATIC_IG_BUSINESS_ID && STATIC_IG_ACCESS_TOKEN) {
     return {
@@ -107,27 +90,17 @@ async function resolveInstagramBusinessIdAdmin(supabase) {
 
   // 2️⃣ Fallback to instagram_accounts table
   try {
-    let query = supabase
-      .from("instagram_accounts")
-      .select(
-        "id, owner_id, ig_business_account_id, facebook_page_id, access_token"
-      )
-      .eq("is_active", true)
-      .order("created_at", { ascending: false })
-      .limit(1);
-
-    if (ADMIN_OWNER_ID) {
-      query = query.eq("owner_id", ADMIN_OWNER_ID);
-    }
-
-    const { data: account, error: accError } = await query.maybeSingle();
-
-    if (accError) {
-      console.error("instagram_accounts error (Supabase):", accError);
-      throw new Error(
-        "Failed to load Instagram account config from database (check Supabase URL/key and table)."
-      );
-    }
+    const account = await prisma.instagram_accounts.findFirst({
+      where: {
+        is_active: true,
+        ...(ADMIN_OWNER_ID ? { owner_id: ADMIN_OWNER_ID } : {}),
+      },
+      select: {
+        id: true, owner_id: true, ig_business_account_id: true,
+        facebook_page_id: true, access_token: true,
+      },
+      orderBy: { created_at: "desc" },
+    });
 
     if (!account) {
       throw new Error(
@@ -186,10 +159,15 @@ async function resolveInstagramBusinessIdAdmin(supabase) {
       igId = newIgId;
 
       // Persist IG ID for next time (best-effort)
-      const { error: updateError } = await supabase
-        .from("instagram_accounts")
-        .update({ ig_business_account_id: igId })
-        .eq("id", account.id);
+      let updateError = null;
+      try {
+        await prisma.instagram_accounts.update({
+          where: { id: account.id },
+          data: { ig_business_account_id: igId },
+        });
+      } catch (e) {
+        updateError = e;
+      }
 
       if (updateError) {
         console.error(
@@ -214,13 +192,13 @@ async function resolveInstagramBusinessIdAdmin(supabase) {
     // Handle low-level fetch errors (ECONNRESET etc.)
     if (String(e?.message || e).includes("fetch failed")) {
       console.error(
-        "Supabase network error in resolveInstagramBusinessIdAdmin:",
+        "Database network error in resolveInstagramBusinessIdAdmin:",
         e
       );
       throw new Error(
-        "Failed to connect to Supabase to load Instagram config. " +
+        "Failed to connect to the database to load Instagram config. " +
           "Either set IG_BUSINESS_ACCOUNT_ID + IG_ACCESS_TOKEN env vars, " +
-          "or fix the Supabase connection."
+          "or fix the database connection."
       );
     }
     throw e;
@@ -236,11 +214,10 @@ async function resolveInstagramBusinessIdAdmin(supabase) {
  */
 export async function GET() {
   try {
-    const supabase = getAdminSupabase();
 
     let userId, igId, igToken;
     try {
-      const resolved = await resolveInstagramBusinessIdAdmin(supabase);
+      const resolved = await resolveInstagramBusinessIdAdmin();
       userId = resolved.userId;
       igId = resolved.igId;
       igToken = resolved.accessToken;
@@ -299,11 +276,14 @@ export async function GET() {
         timestamp: m.timestamp ? new Date(m.timestamp).toISOString() : null,
       }));
 
-      const { error: upsertError } = await supabase
-        .from("instagram_media_posts")
-        .upsert(records, {
-          onConflict: "owner_id,ig_media_id",
-        });
+      let upsertError = null;
+      try {
+        await upsertMetaRows(prisma.instagram_media_posts, records, (r) => ({
+          owner_id_ig_media_id: { owner_id: r.owner_id, ig_media_id: r.ig_media_id },
+        }));
+      } catch (e) {
+        upsertError = e;
+      }
 
       if (upsertError) {
         console.error("Upsert error instagram_media_posts:", upsertError);
@@ -315,11 +295,16 @@ export async function GET() {
     try {
       const remoteIds = new Set(media.map((m) => m.id));
 
-      const { data: cachedRows, error: cacheError } = await supabase
-        .from("instagram_media_posts")
-        .select("ig_media_id")
-        .eq("owner_id", userId)
-        .eq("ig_business_account_id", igId);
+      let cachedRows = null;
+      let cacheError = null;
+      try {
+        cachedRows = await prisma.instagram_media_posts.findMany({
+          where: { owner_id: userId, ig_business_account_id: igId },
+          select: { ig_media_id: true },
+        });
+      } catch (e) {
+        cacheError = e;
+      }
 
       if (cacheError) {
         console.error(
@@ -332,12 +317,18 @@ export async function GET() {
           .filter((id) => id && !remoteIds.has(id));
 
         if (toDelete.length > 0) {
-          const { error: deleteError } = await supabase
-            .from("instagram_media_posts")
-            .delete()
-            .eq("owner_id", userId)
-            .eq("ig_business_account_id", igId)
-            .in("ig_media_id", toDelete);
+          let deleteError = null;
+          try {
+            await prisma.instagram_media_posts.deleteMany({
+              where: {
+                owner_id: userId,
+                ig_business_account_id: igId,
+                ig_media_id: { in: toDelete },
+              },
+            });
+          } catch (e) {
+            deleteError = e;
+          }
 
           if (deleteError) {
             console.error(
@@ -355,21 +346,19 @@ export async function GET() {
     }
 
     // 4️⃣ Read from DB so structure is consistent
-    const { data: cachedMedia, error: cachedError } = await supabase
-      .from("instagram_media_posts")
-      .select(
-        "id, ig_media_id, caption, media_type, media_url, thumbnail_url, permalink, like_count, comments_count, timestamp"
-      )
-      .eq("owner_id", userId)
-      .eq("ig_business_account_id", igId)
-      .order("timestamp", { ascending: false })
-      .limit(20);
-
-    if (cachedError) throw cachedError;
+    const cachedMedia = await prisma.instagram_media_posts.findMany({
+      where: { owner_id: userId, ig_business_account_id: igId },
+      select: {
+        id: true, ig_media_id: true, caption: true, media_type: true, media_url: true,
+        thumbnail_url: true, permalink: true, like_count: true, comments_count: true, timestamp: true,
+      },
+      orderBy: { timestamp: "desc" },
+      take: 20,
+    });
 
     return NextResponse.json(
       {
-        data: cachedMedia,
+        data: jsonSafe(cachedMedia),
       },
       { status: 200 }
     );
@@ -389,7 +378,6 @@ export async function GET() {
  */
 export async function POST(req) {
   try {
-    const supabase = getAdminSupabase();
 
     const body = await req.json();
     const caption = (body.caption || body.message || "").trim();
@@ -405,7 +393,7 @@ export async function POST(req) {
 
     let userId, igId, igToken;
     try {
-      const resolved = await resolveInstagramBusinessIdAdmin(supabase);
+      const resolved = await resolveInstagramBusinessIdAdmin();
       userId = resolved.userId;
       igId = resolved.igId;
       igToken = resolved.accessToken;
@@ -576,11 +564,14 @@ export async function POST(req) {
         : new Date().toISOString(),
     };
 
-    const { error: upsertError } = await supabase
-      .from("instagram_media_posts")
-      .upsert(record, {
-        onConflict: "owner_id,ig_media_id",
-      });
+    let upsertError = null;
+    try {
+      await upsertMetaRows(prisma.instagram_media_posts, [record], (r) => ({
+        owner_id_ig_media_id: { owner_id: r.owner_id, ig_media_id: r.ig_media_id },
+      }));
+    } catch (e) {
+      upsertError = e;
+    }
 
     if (upsertError) {
       console.error("Upsert error instagram_media_posts:", upsertError);
@@ -603,7 +594,6 @@ export async function POST(req) {
  */
 export async function PATCH(req) {
   try {
-    const supabase = getAdminSupabase();
 
     const body = await req.json();
     const igMediaId = body.ig_media_id;
@@ -625,7 +615,7 @@ export async function PATCH(req) {
 
     let userId, igToken;
     try {
-      const resolved = await resolveInstagramBusinessIdAdmin(supabase);
+      const resolved = await resolveInstagramBusinessIdAdmin();
       userId = resolved.userId;
       igToken = resolved.accessToken;
     } catch (e) {
@@ -666,22 +656,19 @@ export async function PATCH(req) {
     }
 
     // Update cached DB row
-    const { data: updated, error: updateError } = await supabase
-      .from("instagram_media_posts")
-      .update({
-        caption,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("owner_id", userId)
-      .eq("ig_media_id", igMediaId)
-      .select(
-        "id, ig_media_id, caption, media_type, media_url, thumbnail_url, permalink, like_count, comments_count, timestamp"
-      )
-      .single();
+    await prisma.instagram_media_posts.updateMany({
+      where: { owner_id: userId, ig_media_id: igMediaId },
+      data: { caption, updated_at: new Date() },
+    });
+    const updated = await prisma.instagram_media_posts.findFirst({
+      where: { owner_id: userId, ig_media_id: igMediaId },
+      select: {
+        id: true, ig_media_id: true, caption: true, media_type: true, media_url: true,
+        thumbnail_url: true, permalink: true, like_count: true, comments_count: true, timestamp: true,
+      },
+    });
 
-    if (updateError) throw updateError;
-
-    return NextResponse.json({ data: updated }, { status: 200 });
+    return NextResponse.json({ data: jsonSafe(updated) }, { status: 200 });
   } catch (err) {
     console.error("PATCH /api/instagram/media error", err);
     return NextResponse.json(
@@ -698,11 +685,10 @@ export async function PATCH(req) {
  */
 export async function DELETE(req) {
   try {
-    const supabase = getAdminSupabase();
 
     let userId;
     try {
-      const resolved = await resolveInstagramBusinessIdAdmin(supabase);
+      const resolved = await resolveInstagramBusinessIdAdmin();
       userId = resolved.userId;
     } catch (e) {
       console.error("Error resolving IG business id (DELETE):", e);
@@ -723,13 +709,9 @@ export async function DELETE(req) {
     }
 
     // Dashboard-only delete: we do NOT remove from Instagram, only from cache
-    const { error: deleteError } = await supabase
-      .from("instagram_media_posts")
-      .delete()
-      .eq("owner_id", userId)
-      .eq("ig_media_id", igMediaId);
-
-    if (deleteError) throw deleteError;
+    await prisma.instagram_media_posts.deleteMany({
+      where: { owner_id: userId, ig_media_id: igMediaId },
+    });
 
     return NextResponse.json(
       { success: true, deleted_id: igMediaId },

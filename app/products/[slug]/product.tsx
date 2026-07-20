@@ -81,7 +81,7 @@ import { uploadMedia } from "@/lib/storage/upload-client";
 import { resolveMediaUrl } from "@/lib/storage/backend";
 import { isSupportedCountry, DEFAULT_COUNTRY, COUNTRY_PROFILES } from "@/lib/countries";
 import { CountryFlag } from "@/components/CountryFlag";
-import { supabaseImageLoader } from "@/lib/supabaseImageLoader";
+import { mediaImageLoader } from "@/lib/mediaImageLoader";
 
 // Read `mik_country` from document.cookie at call-time. Client-only;
 // SSR variant lives at `cookies().get(...)` in the server page.
@@ -1508,7 +1508,7 @@ export default function ProductPage({
                         }`}
                         priority={idx === 0}
                         sizes="(max-width: 1024px) 100vw, 50vw"
-                        loader={supabaseImageLoader}
+                        loader={mediaImageLoader}
                       />
                     ))
                   ) : null}
@@ -1565,7 +1565,7 @@ export default function ProductPage({
                             fill
                             className="object-cover"
                             sizes="80px"
-                            loader={supabaseImageLoader}
+                            loader={mediaImageLoader}
                           />
                         </button>
                       ))}
@@ -2536,7 +2536,7 @@ export default function ProductPage({
                 className="object-contain select-none"
                 sizes="(max-width: 640px) 100vw, 720px"
                 draggable={false}
-                loader={supabaseImageLoader}
+                loader={mediaImageLoader}
               />
             ) : null}
 
@@ -2591,7 +2591,7 @@ export default function ProductPage({
                     fill
                     className="object-cover"
                     sizes="80px"
-                    loader={supabaseImageLoader}
+                    loader={mediaImageLoader}
                   />
                 </button>
               ))}

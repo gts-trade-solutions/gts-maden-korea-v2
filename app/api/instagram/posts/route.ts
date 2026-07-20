@@ -1,9 +1,12 @@
 // app/api/instagram/posts/route.ts
 import { NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
 import { getRouteAuth } from "@/lib/auth/routeUser";
+import { prisma } from "@/lib/db/prisma";
+import { jsonSafe } from "@/lib/db/serialize";
 
 export async function GET(req: Request) {
-  const { user, sb } = await getRouteAuth();
+  const { user } = await getRouteAuth();
 
   if (!user) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
@@ -19,25 +22,25 @@ export async function GET(req: Request) {
     );
   }
 
-  const { data, error } = await sb
-    .from("campaign_posts")
-    .select("*")
-    .eq("campaign_id", campaignId)
-    .order("created_at", { ascending: false });
-
-  if (error) {
+  try {
+    // Ownership: only return posts of a campaign the caller owns (previously
+    // enforced implicitly by RLS).
+    const data = await prisma.campaign_posts.findMany({
+      where: { campaign_id: campaignId, campaigns: { owner_id: user.id } },
+      orderBy: { created_at: "desc" },
+    });
+    return NextResponse.json({ posts: jsonSafe(data) });
+  } catch (error) {
     console.error("GET /api/instagram/posts error:", error);
     return NextResponse.json(
       { error: "Failed to load posts" },
       { status: 500 }
     );
   }
-
-  return NextResponse.json({ posts: data });
 }
 
 export async function POST(req: Request) {
-  const { user, sb } = await getRouteAuth();
+  const { user } = await getRouteAuth();
 
   if (!user) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
@@ -53,41 +56,43 @@ export async function POST(req: Request) {
     );
   }
 
-  // Get the campaign to also grab instagram_account_id and validate ownership via RLS implicitly
-  const { data: campaign, error: campErr } = await sb
-    .from("campaigns")
-    .select("id, instagram_account_id")
-    .eq("id", campaign_id)
-    .maybeSingle();
+  // Get the campaign to grab instagram_account_id and validate ownership
+  // (explicit now that RLS is gone).
+  const campaign = await prisma.campaigns
+    .findFirst({
+      where: { id: campaign_id, owner_id: user.id },
+      select: { id: true, instagram_account_id: true },
+    })
+    .catch((e) => {
+      console.error("Campaign load error:", e);
+      return null;
+    });
 
-  if (campErr || !campaign) {
-    console.error("Campaign load error:", campErr);
+  if (!campaign) {
     return NextResponse.json(
       { error: "Campaign not found or not accessible" },
       { status: 404 }
     );
   }
 
-  const { data: post, error } = await sb
-    .from("campaign_posts")
-    .insert({
-      campaign_id,
-      instagram_account_id: campaign.instagram_account_id,
-      caption,
-      media_type,
-      media_url,
-      status: "draft",
-    })
-    .select("*")
-    .single();
-
-  if (error) {
+  try {
+    const post = await prisma.campaign_posts.create({
+      data: {
+        id: randomUUID(),
+        campaign_id,
+        instagram_account_id: campaign.instagram_account_id,
+        caption,
+        media_type,
+        media_url,
+        status: "draft",
+      },
+    });
+    return NextResponse.json({ post: jsonSafe(post) });
+  } catch (error) {
     console.error("POST /api/instagram/posts error:", error);
     return NextResponse.json(
       { error: "Failed to create post" },
       { status: 500 }
     );
   }
-
-  return NextResponse.json({ post });
 }

@@ -5,7 +5,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { Card } from '../ui/card';
-import { supabaseImageLoader } from '@/lib/supabaseImageLoader';
+import { mediaImageLoader } from '@/lib/mediaImageLoader';
 import {
   Carousel,
   CarouselContent,
@@ -91,7 +91,7 @@ export function BrandCarousel({ brands }: { brands: Brand[] }) {
                     fill
                     className="object-contain"
                     sizes="(min-width:1536px) 14.3vw, (min-width:1280px) 16.6vw, (min-width:1024px) 20vw, (min-width:640px) 33.3vw, 50vw"
-                    loader={supabaseImageLoader}
+                    loader={mediaImageLoader}
                   />
                 </div>
                 <h3 className="font-semibold text-center">{brand.name}</h3>
