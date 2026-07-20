@@ -10,7 +10,6 @@ import {
   DEFAULT_COUNTRY,
   type CountryCode,
 } from "@/lib/countries";
-import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
 
@@ -88,15 +87,13 @@ export function CountryGate() {
     setError(null);
     setSubmitting(true);
     try {
-      const { data: s } = await supabase.auth.getSession();
-      const token = s?.session?.access_token;
+      // Auth travels via the NextAuth session cookie — `credentials: "include"`
+      // is what authenticates this call (the server reads the cookie, never a
+      // bearer header).
       const res = await fetch("/api/me/country", {
         method: "POST",
         credentials: "include",
-        headers: {
-          "content-type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ country }),
       });
       const body = await res.json().catch(() => ({}));
