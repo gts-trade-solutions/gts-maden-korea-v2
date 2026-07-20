@@ -27,7 +27,8 @@ Reference site: https://www.madenkorea.com/
 
 - Next.js 14.2.35 App Router (`/app` directory) · React 18.2 · TypeScript 5.2
 - Tailwind CSS 3.3 + shadcn/Radix UI · `lucide-react` icons
-- Supabase (Auth, Postgres, Storage, Edge Functions, RPCs) — primary backend
+- MySQL 8 + Prisma 6 — the only datastore. NextAuth v4 (JWT credentials) for auth. AWS S3 + CloudFront for media.
+  (Supabase was fully removed — see "Supabase is gone" below.)
 - Razorpay (payments) · DTDC/Shipsy (shipping) · AWS SES (email) · OpenAI (social copy)
 - Meta Graph API · Instagram Graph · Facebook Graph · WhatsApp Cloud API
 - Recharts · Embla · Swiper
@@ -48,11 +49,9 @@ Note: [next.config.js](next.config.js) sets `typescript.ignoreBuildErrors: true`
 
 - [app/](app/) — pages, layouts, route handlers, server actions (App Router).
 - [components/](components/) — shared UI, customer shell, product cards, home modules, [admin/](components/admin/) and [vendor/](components/vendor/) forms, [ui/](components/ui/) shadcn primitives.
-- [lib/](lib/) — Supabase clients, contexts (Auth/Cart/Wishlist), pricing, membership, storage, DTDC, SES, social helpers.
-- [utils/](utils/) — additional Supabase SSR helpers and vendor utilities.
+- [lib/](lib/) — Prisma client ([lib/db/prisma.ts](lib/db/prisma.ts)), data readers ([lib/data/](lib/data/)), auth helpers, contexts (Auth/Cart/Wishlist), pricing, membership, storage (S3), DTDC, SES, social helpers.
+- [utils/](utils/) — assorted shared utilities.
 - [types/](types/) — shared TypeScript domain types.
-- [supabase/migrations/](supabase/migrations/) — local migrations (only a subset of the production schema; see caveat below).
-- [supabase/functions/](supabase/functions/) — deployed edge functions (referral clicks, Meta IG callback, SES webhook).
 - [public/](public/) — logos, static images, certifications, sample WhatsApp template JSON.
 
 Path alias: `@/*` resolves to repo root (see [tsconfig.json](tsconfig.json)). shadcn aliases are in [components.json](components.json).
@@ -60,50 +59,56 @@ Path alias: `@/*` resolves to repo root (see [tsconfig.json](tsconfig.json)). sh
 ## Key Subsystems (one-line each — see CODEBASE_REFERENCE.md for full detail)
 
 - **App shell** — [app/layout.tsx](app/layout.tsx) wraps with ThemeProvider, AuthProvider, CartProvider, WishlistProvider, Toaster, FloatingWhatsApp. Theme is forced light via `next-themes` with `storageKey="madenkorea-theme"`.
-- **Auth** — [lib/contexts/AuthContext.tsx](lib/contexts/AuthContext.tsx) backed by Supabase Auth + `profiles` table. Admin = `profiles.role === "admin"`. Vendors gated separately via [components/vendor/VendorGate.tsx](components/vendor/VendorGate.tsx) using RPC `get_my_vendor`.
-- **Middleware** — [middleware.ts](middleware.ts) refreshes Supabase auth cookies only for `/account`, `/admin`, `/checkout`, `/vendor` (not login/register), and `/auth/callback`.
-- **Cart** — [lib/contexts/CartContext.tsx](lib/contexts/CartContext.tsx). Guests use `localStorage["guest_cart_v1"]`; logged-in users hit Supabase RPCs via [lib/cartClient.ts](lib/cartClient.ts). Guest carts merge into server carts on login (`merge_cart` RPC).
+- **Auth** — NextAuth (JWT credentials) via [lib/auth/authOptions.ts](lib/auth/authOptions.ts); [lib/contexts/AuthContext.tsx](lib/contexts/AuthContext.tsx) wraps `useSession`. Users live in `auth_users` (Prisma model `User`) with the app profile in `profiles` sharing the same id. Role rides in the JWT; admin = `role in (admin, super_admin)`. Server-side: `getSessionUser()` ([lib/auth/session.ts](lib/auth/session.ts)), `getRouteAuth()` ([lib/auth/routeUser.ts](lib/auth/routeUser.ts)), `requireAdmin()` ([lib/auth/adminGuard.ts](lib/auth/adminGuard.ts)).
+- **Middleware** — [middleware.ts](middleware.ts) only seeds the `mik_country` / `mik_currency` / `mik_locale` preference cookies. Auth is validated per-request by NextAuth + the route guards, so there is no session refresh here.
+- **Cart** — [lib/contexts/CartContext.tsx](lib/contexts/CartContext.tsx). Guests use `localStorage["guest_cart_v1"]`; logged-in users hit `/api/cart/*`, which read/write MySQL via [lib/data/cart.ts](lib/data/cart.ts). Guest carts merge into the server cart on login.
 - **Checkout** — [app/checkout/checkout.tsx](app/checkout/checkout.tsx) → [/api/checkout/calc-totals](app/api/checkout/calc-totals/) (server-authoritative pricing/promo/shipping) → [/api/razorpay/create](app/api/razorpay/create/) → [/api/razorpay/verify](app/api/razorpay/verify/) (signature check, mark paid, attribution, promo increment, cart clear, SES emails).
 - **Shipping math** — [lib/membership.ts](lib/membership.ts). K Plus members → free shipping. Otherwise free above `DELIVERY_THRESHOLD = 2000`, else `149`.
 - **Promo cap** — `calc-totals` enforces a global 25% cap across user discount + influencer commission unless overridden by `influence_caps`.
 - **K Plus membership** — Plan code `k_plus`, ₹199, 90 days. APIs under `/api/membership/*`. Table: `user_memberships`.
-- **Influencer/referral** — `/influencer/*` dashboard, `/r/[code]` and `/rl/[id]` redirects, edge function [supabase/functions/log-referral-click](supabase/functions/log-referral-click/). Tables: `influencer_*`, `referral_*`, `promo_codes`, `influence_caps`, `order_attributions`.
+- **Influencer/referral** — `/influencer/*` dashboard, `/r/[code]` and `/rl/[id]` redirects (referral clicks are logged in-app). Tables: `influencer_*`, `referral_*`, `promo_codes`, `influence_caps`, `order_attributions`.
 - **DTDC shipping** — [lib/dtdc/](lib/dtdc/) wraps Shipsy create/cancel/label/track. Auto-create after payment is **commented out** in [app/api/razorpay/verify/route.ts](app/api/razorpay/verify/route.ts) — leave intentional.
 - **Admin portal** — `/admin/*` (products, orders, vendors, CMS, influencers, analytics, invoices, email, whatsapp, marketing). CMS lives at `/admin/cms/*`.
-- **Vendor portal** — `/vendor/*`. Public: `/vendor/login`, `/vendor/register`. Everything else is gated by `VendorGate`.
+- **Vendor portal** — moved out of this repo. It is a standalone app at vendor.madenkorea.com (repo `vendor-portal-v2-gts`) sharing the same MySQL database. The old `app/vendor/*` tree was deleted; `/vendor` 404s here.
 
-## Supabase Client Selection (important)
+## Supabase is gone (migration complete)
 
-There are several helpers — pick the one that matches the execution context:
+The app ran on Supabase (Auth + Postgres + Storage) until it was migrated to
+MySQL/Prisma + NextAuth + S3. **There is no Supabase code, client, or npm
+dependency left** — do not reintroduce one.
 
-| Context | Use |
+| Concern | Use |
 |---|---|
-| Browser/client component | [lib/supabaseClient.ts](lib/supabaseClient.ts) (anon key singleton) |
-| Server component (RSC) | [lib/supabase-rsc.ts](lib/supabase-rsc.ts) |
-| Route handler | [lib/supabaseRoute.ts](lib/supabaseRoute.ts) |
-| Server-side admin / service role | [lib/supabaseAdmin.ts](lib/supabaseAdmin.ts) |
-| Auth/email server flows | [lib/supabaseServer.ts](lib/supabaseServer.ts) |
+| Any DB read/write | `import { prisma } from "@/lib/db/prisma"` (shared singleton) |
+| Reusable queries | [lib/data/](lib/data/) — catalog, cart, checkout, orders, influencer, home, meta |
+| Current user (route/RSC) | `getSessionUser()` / `getRouteAuth()` |
+| Admin gate | `requireAdmin()` — 401/403 response, role from the JWT |
+| Media URLs | `resolveMediaUrl(bucket, path)` ([lib/storage/backend.ts](lib/storage/backend.ts)) — S3/CloudFront only |
+| Uploads | `/api/uploads/presign` (S3 presigned PUT) |
 
-Plus [utils/supabase/](utils/supabase/) (`client.ts`, `server.ts`, `browser.ts`, `middleware.ts`) for SSR helpers.
+Notes for future work:
+- Prisma applies no `dbgenerated()` defaults, so `Char(36)` ids need
+  `randomUUID()` and NOT-NULL Json columns must be written explicitly (`{}` / `[]`).
+- Prisma has no `upsertMany`; batch upserts are a `$transaction` of per-row
+  upserts keyed on the composite unique (see [lib/data/meta.ts](lib/data/meta.ts)).
+- Postgres RLS is gone. Ownership must be enforced explicitly in the `where`
+  clause — an `updateMany`/`deleteMany` matching 0 rows should return 404.
+- Some `*_url` columns still hold legacy Supabase Storage URLs. `supabaseUrlToCdn()`
+  rewrites them to CloudFront (the S3 object lives at the same `<bucket>/<key>`),
+  which is why the `/storage/v1/...` marker strings still exist.
 
-**Never import `lib/supabaseAdmin.ts` (or any service-role client) from a client component.** Service-role keys must stay server-only.
+## Database Schema
 
-Some client components instantiate Supabase directly with env vars instead of importing the shared helper. Functional but inconsistent — prefer the helper when adding new code.
-
-## Database Schema Caveat
-
-[supabase/migrations/](supabase/migrations/) contains only three local migrations. The production Supabase project has **far more** schema than this repo represents. Treat the table list in CODEBASE_REFERENCE.md as the authoritative inventory of what the code touches, and verify column shapes via Supabase Studio or live queries before assuming.
-
-Local migrations present:
-- `20260421_create_password_reset_tokens.sql`
-- `20260422_create_contact_messages.sql`
-- `20260422_enforce_promo_max_uses.sql`
+[prisma/schema.prisma](prisma/schema.prisma) is the source of truth, introspected
+from the live MySQL database. Run `npx prisma generate` after pulling schema
+changes. The migration record (ETL scripts, plans, runbooks) is kept under
+[migration/](migration/) for history.
 
 ## Known Gotchas
 
 - **Two product detail routes exist**: [app/products/[slug]/](app/products/) (active) and [app/product/[slug]/](app/product/) (legacy redirect). Always link to `/products/[slug]`.
 - **Some admin email files are `.txt`**, not `.tsx` — they are archived, not active App Router pages. Don't try to "fix" them by importing them.
-- **Mock data layer is legacy.** `lib/mock-data/`, `MockAuthApi`, `MockProductApi`, `AuthAdapter`, `ProductAdapter` are dead-code candidates (see CODEBASE_REFERENCE dead-code queue). Real data flows through Supabase. Don't extend the mock layer.
+- **Mock data layer is legacy.** `lib/mock-data/`, `MockAuthApi`, `MockProductApi`, `AuthAdapter`, `ProductAdapter` are dead-code candidates (see CODEBASE_REFERENCE dead-code queue). Real data flows through MySQL/Prisma. Don't extend the mock layer.
 - **Razorpay verify route is the heaviest critical path** — [app/api/razorpay/verify/route.ts](app/api/razorpay/verify/route.ts) combines signature verification, payment metadata, attribution, promo increment, cart clear, and inline-HTML SES emails. Edit carefully and test the full payment flow.
 - ~~**Two ProductForm backups exist** (`ProductForm v-1.tsx`, `ProductForm v-2.tsx`) — they are stale and currently contribute typecheck errors. Not imported anywhere; deletion candidates.~~ Both deleted 2026-05-08 (SEO P2 #12 cleanup).
 - **`lib/adminAuth.ts`** checks an `ADMIN_EMAIL` request header but the visible admin UI relies on `AuthContext` role checks — don't mix the two.
@@ -126,14 +131,14 @@ For `<Image>` in a 2-column mobile grid (most product cards), `sizes` must refle
 
 ## Environment Variables
 
-Full categorized list (Supabase, Razorpay, SES, DTDC, Meta/Instagram/Facebook, WhatsApp, OpenAI, referral) is in CODEBASE_REFERENCE.md → "Environment Variables Referenced". **Never read or paste `.env` values into docs, commits, or tool output.**
+Full categorized list (MySQL, NextAuth, S3/CloudFront, Razorpay, SES, DTDC, Meta/Instagram/Facebook, WhatsApp, OpenAI, referral) is in CODEBASE_REFERENCE.md → "Environment Variables Referenced". **Never read or paste `.env` values into docs, commits, or tool output.**
 
 Storage buckets used: `product-media`, `review-media`, `site-assets`.
 
 ## Conventions
 
 - Path alias `@/*` → repo root.
-- Use existing Supabase client helpers; don't construct ad-hoc clients in new code.
+- Import the shared Prisma singleton (`import { prisma } from "@/lib/db/prisma"`); never construct a second PrismaClient (it doubles the connection pool).
 - Prefer route handlers under `app/api/*` for server-authoritative logic (pricing, payment verification, etc.). Keep client components thin.
 - shadcn/Radix UI is the design system. Reuse `components/ui/*` rather than introducing new primitives.
 - The `components/admin/` and `components/vendor/` trees mirror their portal route trees — keep that mapping.
