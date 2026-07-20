@@ -4,12 +4,6 @@ const createNextIntlPlugin = require("next-intl/plugin");
 // Tells next-intl where to find getRequestConfig — our message loader.
 const withNextIntl = createNextIntlPlugin("./i18n/request.ts");
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-let supabaseHost = "";
-try {
-  supabaseHost = new URL(supabaseUrl).hostname; // e.g. bjudxntmpfpbyloibloc.supabase.co
-} catch {}
-
 // S3/CloudFront media host (STORAGE_BACKEND=s3). Derive from the configured CDN
 // URL; fall back to the direct S3 bucket host.
 const S3_MEDIA_HOST = "madenkorea-media.s3.ap-south-1.amazonaws.com";
@@ -36,11 +30,6 @@ const nextConfig = {
         protocol: "https",
         hostname: "images.unsplash.com",
       },
-      // Supabase storage (default backend / flip-back). Guarded so an unset
-      // NEXT_PUBLIC_SUPABASE_URL doesn't register an empty hostname pattern.
-      ...(supabaseHost
-        ? [{ protocol: "https", hostname: supabaseHost, pathname: "/storage/v1/object/public/**" }]
-        : []),
       // S3 media bucket (direct) — for STORAGE_BACKEND=s3.
       { protocol: "https", hostname: S3_MEDIA_HOST },
       // CloudFront / custom CDN host, if different from the direct S3 host.

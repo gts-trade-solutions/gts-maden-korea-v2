@@ -2,7 +2,6 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import { STORAGE_BACKEND } from "@/lib/storage/backend";
 
 // POST /api/uploads/delete  { bucket, key }
 // Backend-aware delete broker (pairs with deleteMedia in lib/storage/upload-client).
@@ -29,10 +28,6 @@ export async function POST(req: Request) {
     const { getRouteUser } = await import("@/lib/auth/routeUser");
     const user = await getRouteUser(req);
     if (!user?.id) return NextResponse.json({ error: "UNAUTHENTICATED" }, { status: 401 });
-  }
-
-  if (STORAGE_BACKEND !== "s3") {
-    return NextResponse.json({ mode: "supabase" });
   }
 
   const { s3Delete } = await import("@/lib/storage/s3");

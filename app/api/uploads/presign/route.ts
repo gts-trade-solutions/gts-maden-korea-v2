@@ -2,7 +2,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import { STORAGE_BACKEND, resolveMediaUrl } from "@/lib/storage/backend";
+import { resolveMediaUrl } from "@/lib/storage/backend";
 
 // POST /api/uploads/presign  { bucket, key, contentType }
 //
@@ -13,9 +13,7 @@ import { STORAGE_BACKEND, resolveMediaUrl } from "@/lib/storage/backend";
 //   - review-media allows any authenticated user (PDP review photos), and the
 //     key must be under "uploads/".
 //
-// When STORAGE_BACKEND=s3 it returns an S3 presigned PUT URL the browser PUTs to.
-// When STORAGE_BACKEND=supabase it returns { mode: "supabase" } so the client
-// keeps its existing supabase-js .upload path (zero behavior change pre-flip).
+// Returns an S3 presigned PUT URL the browser PUTs the file to.
 const ADMIN_BUCKETS = new Set(["product-media", "site-assets", "product-story-media", "facebook-media"]);
 const USER_BUCKETS = new Set(["review-media"]);
 
@@ -44,11 +42,6 @@ export async function POST(req: Request) {
     if (!key.startsWith("uploads/")) {
       return NextResponse.json({ error: "review media key must be under uploads/" }, { status: 400 });
     }
-  }
-
-  // Pre-flip: keep the existing Supabase upload path on the client.
-  if (STORAGE_BACKEND !== "s3") {
-    return NextResponse.json({ mode: "supabase" });
   }
 
   const { presignPutUrl } = await import("@/lib/storage/s3");

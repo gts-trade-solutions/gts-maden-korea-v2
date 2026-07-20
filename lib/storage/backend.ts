@@ -1,27 +1,22 @@
-// Backend-aware media URL resolver — the single source of truth for turning a
-// stored media path/URL into a public URL, under either storage backend.
+// Media URL resolver — the single source of truth for turning a stored media
+// path/URL into a public URL. All media is served from S3/CloudFront.
 //
-// Strangler-fig: NEXT_PUBLIC_STORAGE_BACKEND = "supabase" (default) | "s3".
-// Reversible by flipping the flag; no DB rewrite (S3 key = "<bucket>/<key>",
-// identical to what the Supabase public URL concatenates after its host).
+// Historic DB values are mixed: bare keys, "<bucket>/<key>", and full Supabase
+// Storage URLs from before the migration. The markers below let us recognise
+// those legacy URLs and re-point them at the CDN — the S3 object lives at the
+// same "<bucket>/<key>", so it is a pure host rewrite with no DB migration.
 //
 // Pure + isomorphic (no SDK) so it runs in client and server components alike.
-// The normalizer is the tolerant logic previously duplicated in product.tsx
-// (storagePublicUrl/reviewMediaUrl) and storyMediaUrl, so legacy mixed DB
-// values (full /storage/v1/object/public/ URLs, bucket-prefixed keys) keep
-// resolving under both backends.
 
 const SUPABASE_MARKER = "/storage/v1/object/public/";
 // Supabase's image-transform endpoint uses a different prefix but the same
 // `<bucket>/<key>` shape after it.
 const SUPABASE_RENDER_MARKER = "/storage/v1/render/image/public/";
 
-export type StorageBackend = "supabase" | "s3";
+// Retained so existing imports keep compiling; S3 is the only backend now.
+export type StorageBackend = "s3";
+export const STORAGE_BACKEND: StorageBackend = "s3";
 
-export const STORAGE_BACKEND: StorageBackend =
-  process.env.NEXT_PUBLIC_STORAGE_BACKEND === "s3" ? "s3" : "supabase";
-
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 // S3/CloudFront base (no trailing slash needed), e.g.
 // https://madenkorea-media.s3.ap-south-1.amazonaws.com  or a CloudFront domain.
 const MEDIA_CDN_URL = (process.env.NEXT_PUBLIC_MEDIA_CDN_URL || "").replace(/\/+$/, "");
@@ -38,7 +33,7 @@ const MEDIA_CDN_URL = (process.env.NEXT_PUBLIC_MEDIA_CDN_URL || "").replace(/\/+
  * code path that renders a stored full URL directly.
  */
 export function supabaseUrlToCdn(url: string): string {
-  if (STORAGE_BACKEND !== "s3" || !MEDIA_CDN_URL || !url) return url;
+  if (!MEDIA_CDN_URL || !url) return url;
   for (const marker of [SUPABASE_MARKER, SUPABASE_RENDER_MARKER]) {
     const idx = url.indexOf(marker);
     if (idx >= 0) {
@@ -75,8 +70,8 @@ export function normalizeKey(bucket: string, rawPath: string): string {
  * - Falsy -> undefined.
  * - External absolute URL (NOT our Supabase storage host) -> passed through
  *   unchanged (Instagram/Facebook media, OAuth avatar pictures, etc.).
- * - Our storage (relative key OR a Supabase public URL) -> re-resolved to the
- *   active backend (Supabase public URL, or `${CDN}/<bucket>/<key>` for S3).
+ * - Our storage (relative key OR a legacy Supabase public URL) -> resolved to
+ *   `${CDN}/<bucket>/<key>`.
  */
 export function resolveMediaUrl(bucket: string, rawPath?: string | null): string | undefined {
   if (!rawPath) return undefined;
@@ -90,8 +85,5 @@ export function resolveMediaUrl(bucket: string, rawPath?: string | null): string
   const key = normalizeKey(bucket, trimmed);
   if (!key) return undefined;
 
-  if (STORAGE_BACKEND === "s3") {
-    return MEDIA_CDN_URL ? `${MEDIA_CDN_URL}/${bucket}/${key}` : undefined;
-  }
-  return SUPABASE_URL ? `${SUPABASE_URL}${SUPABASE_MARKER}${bucket}/${key}` : undefined;
+  return MEDIA_CDN_URL ? `${MEDIA_CDN_URL}/${bucket}/${key}` : undefined;
 }
