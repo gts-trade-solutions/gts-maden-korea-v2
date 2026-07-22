@@ -188,20 +188,24 @@ export default async function RootLayout({
 
   return (
     <html lang={htmlLang} suppressHydrationWarning>
-      <head>
-        {/* Preconnect to the Supabase storage host so the TLS / DNS
-            handshakes happen in parallel with HTML parsing. Every
-            product image, hero banner, and brand logo on the site is
-            served from this origin, so the first image fetch lands
-            ~100-300ms sooner on cold connections. */}
+      <body className={`${inter.className} overflow-x-clip`}>
+        {/* Preconnect to the media CDN host so the TLS / DNS handshakes
+            happen in parallel with HTML parsing. Every product image, hero
+            banner, and brand logo is served from this origin, so the first
+            image fetch lands ~100-300ms sooner on cold connections.
+
+            These are deliberately NOT wrapped in a <head> element: the App
+            Router owns <head> and injects metadata into it, so rendering our
+            own <head> here made the server and client disagree about its
+            contents — hydration then discarded the tree along with the
+            stylesheet <link>, leaving the page unstyled. React hoists <link>
+            into <head> on its own, which is the supported way to do this. */}
         {MEDIA_CDN_HOST && (
           <>
             <link rel="preconnect" href={`https://${MEDIA_CDN_HOST}`} crossOrigin="anonymous" />
             <link rel="dns-prefetch" href={`https://${MEDIA_CDN_HOST}`} />
           </>
         )}
-      </head>
-      <body className={`${inter.className} overflow-x-clip`}>
         <ThemeProvider
           attribute="class"
           defaultTheme="light"

@@ -1,5 +1,6 @@
 import { redirect, notFound } from "next/navigation";
 import Link from "next/link";
+import { FileText } from "lucide-react";
 import { getSessionUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db/prisma";
 import { CustomerLayout } from "@/components/CustomerLayout";
@@ -148,7 +149,7 @@ export default async function SkinAnalysisDetailPage({
         className="mx-auto max-w-6xl px-4 py-6"
         style={{ ["--hdr" as string]: "128px" } as React.CSSProperties}
       >
-        <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
               Your skin analysis
@@ -161,7 +162,24 @@ export default async function SkinAnalysisDetailPage({
               })}
             </p>
           </div>
-          <div className="flex shrink-0 gap-2">
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            {/* Primary CTA — highlighted so users know the full report lives
+                behind it. Filled, larger, with an icon and a pulsing beacon
+                dot that draws the eye toward it. */}
+            <span className="relative inline-flex">
+              <Button
+                asChild
+                className="shadow-md shadow-primary/30 ring-2 ring-primary/40 transition hover:ring-primary/60"
+              >
+                <Link href={`/account/skin-analysis/${analysis.id}/report`}>
+                  <FileText className="mr-2 h-4 w-4" /> View full report
+                </Link>
+              </Button>
+              <span className="pointer-events-none absolute -right-1.5 -top-1.5 flex h-3.5 w-3.5">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75" />
+                <span className="relative inline-flex h-3.5 w-3.5 rounded-full bg-rose-500" />
+              </span>
+            </span>
             {prev ? (
               <Button asChild variant="outline" size="sm">
                 <Link
@@ -176,6 +194,14 @@ export default async function SkinAnalysisDetailPage({
             </Button>
           </div>
         </div>
+
+        {/* One-line nudge reinforcing the CTA above. */}
+        <p className="mb-4 flex items-center gap-1.5 text-sm text-muted-foreground">
+          <FileText className="h-3.5 w-3.5 text-primary" />
+          Tap{" "}
+          <span className="font-medium text-foreground">View full report</span>{" "}
+          for your web chart, per-concern breakdown and a downloadable PDF.
+        </p>
 
         <SkinResultView
           baseImage={summary.base_image ?? null}

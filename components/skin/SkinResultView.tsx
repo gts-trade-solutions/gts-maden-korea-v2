@@ -3,7 +3,14 @@
 import * as React from "react";
 import { useState } from "react";
 import Link from "next/link";
-import { Images, ShoppingBag, Sparkles } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Hand,
+  Images,
+  ShoppingBag,
+  Sparkles,
+} from "lucide-react";
 import {
   concernLabel,
   concernDescription,
@@ -58,12 +65,21 @@ export function SkinResultView({
 }) {
   const [sel, setSel] = useState<string | null>(null);
   const [modalConcern, setModalConcern] = useState<string | null>(null);
+  // AI summary starts collapsed to a single line so it doesn't eat the photo;
+  // the user expands it to the full paragraph (with clickable concerns).
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  // First-run coach hint on the mobile concern strip; hidden once the user
+  // taps or scrolls it.
+  const [interacted, setInteracted] = useState(false);
   const selConcern = sel ? concerns.find((c) => c.key === sel) : null;
   const shown = selConcern?.imageUrl ?? baseImage;
   const anyImages = concerns.some((c) => c.imageUrl);
   const overallRating = overall != null ? scoreRating(overall) : null;
   const recoCount = (key: string) => recommendations[key]?.length ?? 0;
-  const toggle = (key: string) => setSel((s) => (s === key ? null : key));
+  const toggle = (key: string) => {
+    setInteracted(true);
+    setSel((s) => (s === key ? null : key));
+  };
   const selProducts = sel ? (recommendations[sel] ?? []) : [];
 
   // Concerns with product suggestions — highlighted in the AI summary.
@@ -95,10 +111,34 @@ export function SkinResultView({
       </p>
     )
   ) : aiSummary ? (
-    <p className="flex gap-2 text-xs leading-relaxed text-white/90">
-      <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-white/70" />
-      <span>{highlightSummary(aiSummary, treatmentConcerns, setModalConcern)}</span>
-    </p>
+    summaryOpen ? (
+      <div>
+        <p className="flex gap-2 text-xs leading-relaxed text-white/90">
+          <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-white/70" />
+          <span>
+            {highlightSummary(aiSummary, treatmentConcerns, setModalConcern)}
+          </span>
+        </p>
+        <button
+          onClick={() => setSummaryOpen(false)}
+          className="mt-1.5 flex items-center gap-0.5 text-[11px] font-medium text-white/70 hover:text-white"
+        >
+          Show less <ChevronDown className="h-3 w-3 rotate-180" />
+        </button>
+      </div>
+    ) : (
+      <button
+        onClick={() => setSummaryOpen(true)}
+        className="flex w-full items-center gap-2 text-left"
+        aria-label="Expand summary"
+      >
+        <Sparkles className="h-3.5 w-3.5 shrink-0 text-white/70" />
+        <span className="line-clamp-1 flex-1 text-xs text-white/90">
+          {aiSummary}
+        </span>
+        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-white/70" />
+      </button>
+    )
   ) : anyImages ? (
     <p className="text-[11px] text-white/70">
       Tap a concern to see it on your photo
@@ -151,38 +191,56 @@ export function SkinResultView({
                   {contextual}
                 </div>
               ) : null}
-              <div className="-mx-1 mt-3 flex gap-2 overflow-x-auto px-1 lg:hidden">
-                {concerns.map((c) => {
-                  const active = sel === c.key;
-                  const n = recoCount(c.key);
-                  const clickable = !!c.imageUrl || n > 0;
-                  return (
-                    <button
-                      key={c.key}
-                      disabled={!clickable}
-                      onClick={() => toggle(c.key)}
-                      className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium backdrop-blur ${
-                        active
-                          ? "bg-white text-slate-900"
-                          : "bg-black/50 text-white"
-                      } ${clickable ? "" : "opacity-55"}`}
-                    >
-                      <span
-                        className={`h-1.5 w-1.5 shrink-0 rounded-full ${scoreRating(c.score).barClass}`}
-                      />
-                      {concernLabel(c.key)}
-                      <span className="tabular-nums opacity-80">
-                        {Math.round(c.score * 100)}
-                      </span>
-                      {n > 0 ? (
-                        <span className="flex items-center gap-0.5">
-                          <ShoppingBag className="h-3 w-3" />
-                          {n}
-                        </span>
-                      ) : null}
-                    </button>
-                  );
-                })}
+              <div className="mt-3 lg:hidden">
+                {/* First-run hint: teaches that the strip is tappable and
+                    scrollable. Disappears once the user taps or scrolls it. */}
+                {!interacted ? (
+                  <div className="mb-1.5 flex animate-pulse items-center justify-center gap-1.5 text-[10px] font-medium text-white/85">
+                    <Hand className="h-3 w-3" />
+                    Tap a concern to see it on your photo · swipe for more
+                    <ChevronRight className="h-3 w-3" />
+                  </div>
+                ) : null}
+                <div className="relative -mx-1">
+                  <div
+                    onScroll={() => setInteracted(true)}
+                    className="flex gap-2 overflow-x-auto px-1 pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                  >
+                    {concerns.map((c) => {
+                      const active = sel === c.key;
+                      const n = recoCount(c.key);
+                      const clickable = !!c.imageUrl || n > 0;
+                      return (
+                        <button
+                          key={c.key}
+                          disabled={!clickable}
+                          onClick={() => toggle(c.key)}
+                          className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium backdrop-blur ${
+                            active
+                              ? "bg-white text-slate-900"
+                              : "bg-black/50 text-white"
+                          } ${clickable ? "" : "opacity-55"}`}
+                        >
+                          <span
+                            className={`h-1.5 w-1.5 shrink-0 rounded-full ${scoreRating(c.score).barClass}`}
+                          />
+                          {concernLabel(c.key)}
+                          <span className="tabular-nums opacity-80">
+                            {Math.round(c.score * 100)}
+                          </span>
+                          {n > 0 ? (
+                            <span className="flex items-center gap-0.5">
+                              <ShoppingBag className="h-3 w-3" />
+                              {n}
+                            </span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {/* Right-edge fade signals there's more to scroll to. */}
+                  <div className="pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-black/50 to-transparent" />
+                </div>
               </div>
             </div>
           </div>

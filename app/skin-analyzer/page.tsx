@@ -213,7 +213,12 @@ export default function SkinAnalyzerPage() {
     }
   }
 
-  function Cta() {
+  // NOTE: these are plain render helpers, not components. Declaring a component
+  // inside another component gives it a new function identity on every render,
+  // so React treats it as a different type and unmounts/remounts the whole
+  // subtree instead of updating it — which tears down nodes it adopted during
+  // hydration and crashes in unmountHoistable.
+  function renderCta() {
     if (!status) {
       return (
         <Button disabled size="lg" className="w-full">
@@ -292,7 +297,7 @@ export default function SkinAnalyzerPage() {
   }
 
   // Compact single-button CTA for the mobile sticky bar.
-  function MobileStickyCta() {
+  function renderMobileStickyCta() {
     if (!status) {
       return (
         <Button disabled className="w-full">
@@ -360,7 +365,7 @@ export default function SkinAnalyzerPage() {
             </p>
 
             <div className="mt-7 max-w-sm">
-              <Cta />
+              {renderCta()}
               <p className="mt-3 text-center text-xs text-muted-foreground lg:text-left">
                 1 free analysis · results saved to your account
               </p>
@@ -553,7 +558,7 @@ export default function SkinAnalyzerPage() {
             concerns, and get a routine made for you.
           </p>
           <div className="mx-auto mt-7 max-w-sm rounded-2xl bg-white p-4 text-foreground shadow-xl">
-            <Cta />
+            {renderCta()}
           </div>
         </div>
       </section>
@@ -567,7 +572,7 @@ export default function SkinAnalyzerPage() {
         style={{ paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom))" }}
       >
         <div className="mr-16">
-          <MobileStickyCta />
+          {renderMobileStickyCta()}
         </div>
       </div>
     </CustomerLayout>
@@ -663,27 +668,6 @@ function FaceAnalysisCard() {
         </div>
       </div>
 
-      <style jsx global>{`
-        @keyframes mk-scanline {
-          0% {
-            top: 8%;
-            opacity: 0;
-          }
-          20% {
-            opacity: 0.85;
-          }
-          80% {
-            opacity: 0.85;
-          }
-          100% {
-            top: 92%;
-            opacity: 0;
-          }
-        }
-        .mk-scanline {
-          animation: mk-scanline 4s ease-in-out infinite;
-        }
-      `}</style>
     </div>
   );
 }

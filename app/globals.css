@@ -119,3 +119,27 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Skin-analyzer landing: scan-line sweep on the hero face card.
+   Kept here rather than in a styled-jsx `global` block — styled-jsx global
+   styles inject into <head> during SSR and break App Router hydration. */
+@keyframes mk-scanline {
+  0% {
+    top: 8%;
+    opacity: 0;
+  }
+  20% {
+    opacity: 0.85;
+  }
+  80% {
+    opacity: 0.85;
+  }
+  100% {
+    top: 92%;
+    opacity: 0;
+  }
+}
+
+.mk-scanline {
+  animation: mk-scanline 4s ease-in-out infinite;
+}
