@@ -75,8 +75,21 @@ export default async function SkinAnalysisHistoryPage() {
               return (
                 <Link key={a.id} href={`/account/skin-analysis/${a.id}`}>
                   <Card className="transition-colors hover:bg-muted/40">
-                    <CardHeader className="flex-row items-center justify-between space-y-0 py-4">
-                      <div>
+                    <CardHeader className="flex-row items-center gap-3 space-y-0 py-4">
+                      {/* Analyzed face — makes each past analysis recognizable */}
+                      {summary.base_image ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={summary.base_image}
+                          alt="Analyzed photo"
+                          className="h-14 w-14 shrink-0 rounded-lg object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg bg-muted">
+                          <Sparkles className="h-5 w-5 text-muted-foreground" />
+                        </div>
+                      )}
+                      <div className="min-w-0 flex-1">
                         <CardTitle className="text-sm">
                           {new Date(a.createdAt).toLocaleDateString(undefined, {
                             year: "numeric",
@@ -84,11 +97,11 @@ export default async function SkinAnalysisHistoryPage() {
                             day: "numeric",
                           })}
                         </CardTitle>
-                        <p className="mt-0.5 text-xs text-muted-foreground">
+                        <p className="mt-0.5 truncate text-xs text-muted-foreground">
                           {top || "View result"}
                         </p>
                       </div>
-                      <div className="flex items-center gap-3">
+                      <div className="flex shrink-0 items-center gap-3">
                         {summary.overall != null ? (
                           <span
                             className={`rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums ${scoreRating(summary.overall).chipClass}`}

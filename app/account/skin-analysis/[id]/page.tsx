@@ -195,13 +195,16 @@ export default async function SkinAnalysisDetailPage({
           </div>
         </div>
 
-        {/* One-line nudge reinforcing the CTA above. */}
-        <p className="mb-4 flex items-center gap-1.5 text-sm text-muted-foreground">
-          <FileText className="h-3.5 w-3.5 text-primary" />
-          Tap{" "}
-          <span className="font-medium text-foreground">View full report</span>{" "}
-          for your web chart, per-concern breakdown and a downloadable PDF.
-        </p>
+        {/* Nudge reinforcing the CTA above. Icon aligns to the first line so it
+            reads cleanly when the text wraps on mobile. */}
+        <div className="mb-4 flex items-start gap-2 rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm text-muted-foreground">
+          <FileText className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+          <p>
+            Tap{" "}
+            <span className="font-medium text-foreground">View full report</span>{" "}
+            for your web chart, per-concern breakdown and a downloadable PDF.
+          </p>
+        </div>
 
         <SkinResultView
           baseImage={summary.base_image ?? null}

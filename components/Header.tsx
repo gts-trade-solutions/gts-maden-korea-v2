@@ -14,6 +14,7 @@ import {
   ChevronRight,
   Sparkles,
   Heart,
+  ScanFace,
 } from "lucide-react";
 import { useCart } from "@/lib/contexts/CartContext";
 import { useAuth } from "@/lib/contexts/AuthContext";
@@ -423,7 +424,7 @@ export function Header() {
 
       <div className="container mx-auto relative">
         <div className={`flex ${HEADER_H_CLASS} items-center justify-between gap-3`}>
-          <div className="flex items-center gap-2 md:gap-6">
+          <div className="flex flex-1 items-center gap-2 md:gap-6">
             <Sheet>
               <SheetTrigger asChild>
                 <Button
@@ -529,14 +530,15 @@ export function Header() {
 
                   <nav className="px-3">
                     <div className="mb-4 space-y-3">
+                      <Link
+                        href="/skin-analyzer"
+                        className="flex items-center gap-2 rounded-lg bg-rose-50 px-3 py-2 text-base font-semibold uppercase text-rose-700"
+                      >
+                        <ScanFace className="h-5 w-5" />
+                        {t("navSkinAnalysis")}
+                      </Link>
                       <Link href="/best-seller" className="block text-base uppercase">
                         {t("navBestSeller")}
-                      </Link>
-                      <Link href="/shop-199" className="block text-base uppercase">
-                        {t("navShop199")}
-                      </Link>
-                      <Link href="/contact" className="block text-base uppercase">
-                        {t("navSupport")}
                       </Link>
                       {isINR && (
                         <Link href="/k-plus" className="block text-base uppercase">
@@ -617,13 +619,43 @@ export function Header() {
                           </ul>
                         </AccordionContent>
                       </AccordionItem>
+                      <AccordionItem value="more">
+                        <AccordionTrigger className="text-base uppercase">
+                          {t("navMore")}
+                        </AccordionTrigger>
+                        <AccordionContent>
+                          <ul className="space-y-1">
+                            <li>
+                              <Link
+                                href="/bundles"
+                                className="flex items-center justify-between rounded-lg px-3 py-2 text-sm hover:bg-accent"
+                              >
+                                <span>{t("navBundles")}</span>
+                                <ChevronRight className="h-4 w-4 opacity-60" />
+                              </Link>
+                            </li>
+                            <li>
+                              <Link
+                                href="/shop-199"
+                                className="flex items-center justify-between rounded-lg px-3 py-2 text-sm hover:bg-accent"
+                              >
+                                <span>{t("navShop199")}</span>
+                                <ChevronRight className="h-4 w-4 opacity-60" />
+                              </Link>
+                            </li>
+                            <li>
+                              <Link
+                                href="/contact"
+                                className="flex items-center justify-between rounded-lg px-3 py-2 text-sm hover:bg-accent"
+                              >
+                                <span>{t("navSupport")}</span>
+                                <ChevronRight className="h-4 w-4 opacity-60" />
+                              </Link>
+                            </li>
+                          </ul>
+                        </AccordionContent>
+                      </AccordionItem>
                     </Accordion>
-
-                    <div className="mt-4 space-y-3">
-                      <Link href="/bundles" className="block text-base uppercase">
-                        {t("navBundles")}
-                      </Link>
-                    </div>
 
                   </nav>
                 </ScrollArea>
@@ -641,7 +673,7 @@ export function Header() {
               />
             </Link>
 
-            <nav className="hidden md:block">
+            <nav className="hidden flex-1 items-center md:flex">
               <NavigationMenu>
                 <NavigationMenuList>
                   <NavigationMenuItem>
@@ -736,45 +768,66 @@ export function Header() {
                   </NavigationMenuItem>
 
                   <NavigationMenuItem>
-                    <Link
-                      href="/bundles"
-                      className="group inline-flex h-10 w-max items-center justify-center rounded-md bg-background px-4 py-2 text-sm font-medium uppercase transition-colors hover:bg-accent hover:text-accent-foreground"
-                    >
-                      {t("navBundles")}
-                    </Link>
+                    <NavigationMenuTrigger className="text-sm uppercase">
+                      {t("navMore")}
+                    </NavigationMenuTrigger>
+                    <NavigationMenuContent>
+                      <div className="grid w-[560px] max-w-[80vw] grid-cols-2 gap-2 p-4 md:grid-cols-3">
+                        <Link
+                          href="/bundles"
+                          className="rounded-lg p-3 text-sm hover:bg-accent"
+                        >
+                          <div className="font-medium">{t("navBundles")}</div>
+                          <div className="text-xs text-muted-foreground">
+                            Curated value sets & kits
+                          </div>
+                        </Link>
+                        <Link
+                          href="/shop-199"
+                          className="rounded-lg p-3 text-sm hover:bg-accent"
+                        >
+                          <div className="font-medium">{t("navShop199")}</div>
+                          <div className="text-xs text-muted-foreground">
+                            Budget-friendly picks
+                          </div>
+                        </Link>
+                        <Link
+                          href="/contact"
+                          className="rounded-lg p-3 text-sm hover:bg-accent"
+                        >
+                          <div className="font-medium">{t("navSupport")}</div>
+                          <div className="text-xs text-muted-foreground">
+                            Help & customer care
+                          </div>
+                        </Link>
+                      </div>
+                    </NavigationMenuContent>
                   </NavigationMenuItem>
 
-                  <NavigationMenuItem>
-                    <Link
-                      href="/shop-199"
-                      className="group inline-flex h-10 w-max items-center justify-center rounded-md bg-background px-4 py-2 text-sm font-medium uppercase transition-colors hover:bg-accent hover:text-accent-foreground"
-                    >
-                      {t("navShop199")}
-                    </Link>
-                  </NavigationMenuItem>
-
-                  <NavigationMenuItem>
-                    <Link
-                      href="/contact"
-                      className="group inline-flex h-10 w-max items-center justify-center rounded-md bg-background px-4 py-2 text-sm font-medium uppercase transition-colors hover:bg-accent hover:text-accent-foreground"
-                    >
-                      {t("navSupport")}
-                    </Link>
-                  </NavigationMenuItem>
-
-                  {isINR && (
-                    <NavigationMenuItem>
-                      <Link
-                        href="/k-plus"
-                        className="inline-flex h-10 w-max items-center justify-center whitespace-nowrap rounded-full bg-gradient-to-r from-sky-600 via-indigo-600 to-violet-600 px-4 text-sm font-semibold uppercase tracking-[0.08em] text-white shadow-md shadow-indigo-500/25"
-                      >
-                        <Sparkles className="mr-2 h-4 w-4" />
-                        {t("navKPlus")}
-                      </Link>
-                    </NavigationMenuItem>
-                  )}
                 </NavigationMenuList>
               </NavigationMenu>
+
+              {/* Buttons pushed to the right of the nav (ml-auto), so the
+                  dropdown options stay left and the empty space falls between
+                  "More" and these action buttons. */}
+              <div className="ml-auto flex items-center gap-2">
+                <Link
+                  href="/skin-analyzer"
+                  className="inline-flex h-10 w-max items-center justify-center whitespace-nowrap rounded-full border border-rose-200 bg-rose-50 px-4 text-sm font-semibold uppercase tracking-[0.04em] text-rose-700 transition-colors hover:bg-rose-100"
+                >
+                  <ScanFace className="mr-2 h-4 w-4" />
+                  {t("navSkinAnalysis")}
+                </Link>
+                {isINR && (
+                  <Link
+                    href="/k-plus"
+                    className="inline-flex h-10 w-max items-center justify-center whitespace-nowrap rounded-full bg-gradient-to-r from-sky-600 via-indigo-600 to-violet-600 px-4 text-sm font-semibold uppercase tracking-[0.08em] text-white shadow-md shadow-indigo-500/25"
+                  >
+                    <Sparkles className="mr-2 h-4 w-4" />
+                    {t("navKPlus")}
+                  </Link>
+                )}
+              </div>
             </nav>
           </div>
 

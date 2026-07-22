@@ -65,10 +65,11 @@ export function SkinProfileDashboard({
   const ordered = [...concerns].sort(
     (a, b) => concernOrder(a.key) - concernOrder(b.key),
   );
-  const chartData = ordered.map((c) => ({
+  const chartData = ordered.map((c, i) => ({
     key: c.key,
     label: concernLabel(c.key),
     score: Math.round(c.score * 100),
+    idx: i,
   }));
   const byLabel = new Map(chartData.map((d) => [d.label, d]));
 
@@ -81,31 +82,42 @@ export function SkinProfileDashboard({
   const good = ordered.filter((c) => c.score * 100 >= 75);
   const topStrengths = [...concerns].sort((a, b) => b.score - a.score).slice(0, 3);
 
-  // Radar tick: concern name + its score, the score tinted by its band.
+  // Radar tick: concern name (line 1) + its score (line 2, tinted by band).
+  // Labels are pushed radially outward from the vertex so adjacent labels — 15
+  // of them, only 24° apart — don't collide, and the two lines are kept tight.
   const renderTick = (props: any) => {
-    const { x, y, textAnchor, payload } = props;
+    const { x, y, cx, cy, textAnchor, payload } = props;
     const d = byLabel.get(payload?.value);
     if (!d) return null;
     const b = band(d.score / 100);
+    // Shift the label outward from the vertex, and STAGGER alternate labels to
+    // a further ring so adjacent labels (only 24° apart, 15 of them) sit at
+    // different radii and never collide.
+    const dx = x - cx;
+    const dy = y - cy;
+    const len = Math.hypot(dx, dy) || 1;
+    const push = 8 + (d.idx % 2 === 1 ? 20 : 0);
+    const ox = x + (dx / len) * push;
+    const oy = y + (dy / len) * push;
     return (
       <g>
         <text
-          x={x}
-          y={y}
+          x={ox}
+          y={oy - 5}
           textAnchor={textAnchor}
           dominantBaseline="central"
-          fontSize={11}
+          fontSize={9}
           fontWeight={600}
-          fill="#334155"
+          fill="#475569"
         >
           {d.label}
         </text>
         <text
-          x={x}
-          y={y + 13}
+          x={ox}
+          y={oy + 6}
           textAnchor={textAnchor}
           dominantBaseline="central"
-          fontSize={12}
+          fontSize={10}
           fontWeight={700}
           fill={b.hex}
         >
@@ -142,21 +154,21 @@ export function SkinProfileDashboard({
       {/* Radar — full-width hero so it gets the whole document width instead of
           being squeezed between side panels. */}
       <div className="break-inside-avoid rounded-xl border bg-white p-2 sm:p-4">
-        <div className="h-[380px] w-full sm:h-[520px]">
+        <div className="h-[440px] w-full sm:h-[560px] print:h-[470px]">
           {mounted ? (
             <ResponsiveContainer width="100%" height="100%">
               <RadarChart
                 data={chartData}
-                outerRadius="74%"
-                margin={{ top: 28, right: 48, bottom: 28, left: 48 }}
+                outerRadius="64%"
+                margin={{ top: 36, right: 76, bottom: 36, left: 76 }}
               >
                 <PolarGrid stroke="#e5e7eb" />
                 <PolarAngleAxis dataKey="label" tick={renderTick as any} />
                 <PolarRadiusAxis
                   domain={[0, 100]}
-                  angle={90}
+                  angle={78}
                   tickCount={5}
-                  tick={{ fontSize: 9, fill: "#9ca3af" }}
+                  tick={{ fontSize: 8, fill: "#cbd5e1" }}
                   axisLine={false}
                 />
                 <Radar
@@ -173,7 +185,7 @@ export function SkinProfileDashboard({
       </div>
 
       {/* gauge · key insights · top strengths */}
-      <div className="mt-5 grid gap-4 lg:grid-cols-3">
+      <div className="mt-5 grid gap-4 lg:grid-cols-3 print:grid-cols-3">
         {/* Overall gauge */}
         <div className="break-inside-avoid rounded-xl border bg-white p-4 text-center">
           <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">
@@ -251,7 +263,7 @@ export function SkinProfileDashboard({
       </div>
 
       {/* Band recommendation cards */}
-      <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4 print:grid-cols-4">
         <BandCard
           icon={HeartPulse}
           tone={{ bg: "bg-red-100", text: "text-red-600", bar: "bg-red-500" }}

@@ -25,6 +25,17 @@
   .print\:border-none {
     border: none !important;
   }
+
+  /* The skin report is a colour-rich document (gauge, radar fill, band cards,
+     chips, score bars). Browsers drop background colours when printing by
+     default, which wrecks it — force exact colour reproduction. Scoped to the
+     report so invoice printing (intentionally monochrome) is unaffected. */
+  .skin-report-doc,
+  .skin-report-doc * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
 }
 
 /* Hide horizontal scrollbar on mobile while keeping scrollability */

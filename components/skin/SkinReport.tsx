@@ -75,7 +75,7 @@ export function SkinReport({
   ) : null;
 
   return (
-    <div className="min-h-screen bg-muted/30 py-6 print:bg-white print:py-0">
+    <div className="skin-report-doc min-h-screen bg-muted/30 py-6 print:bg-white print:py-0">
       {/* Toolbar — hidden when printing */}
       <div className="mx-auto mb-4 flex max-w-3xl items-center justify-between px-4 print:hidden">
         <Button asChild variant="ghost" size="sm">
@@ -283,7 +283,10 @@ function ReportProduct({ product }: { product: ProductData }) {
     : null;
   const price = product.sale_price ?? product.price;
   return (
-    <div className="flex gap-2 rounded-lg border p-2">
+    <Link
+      href={`/products/${product.slug}`}
+      className="flex gap-2 rounded-lg border p-2 transition-colors hover:bg-muted/50"
+    >
       {img ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
@@ -304,7 +307,7 @@ function ReportProduct({ product }: { product: ProductData }) {
           </div>
         ) : null}
       </div>
-    </div>
+    </Link>
   );
 }
 
