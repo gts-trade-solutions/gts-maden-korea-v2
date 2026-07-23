@@ -349,6 +349,13 @@ export default function AdminDashboard() {
               <Button
                 variant="outline"
                 className="w-full"
+                onClick={() => router.push("/admin/skin-analysis/analyses")}
+              >
+                All analyses
+              </Button>
+              <Button
+                variant="outline"
+                className="w-full"
                 onClick={() => router.push("/admin/skin-analysis/requests")}
               >
                 Access requests

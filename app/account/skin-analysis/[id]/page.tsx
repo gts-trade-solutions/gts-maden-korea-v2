@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db/prisma";
 import { CustomerLayout } from "@/components/CustomerLayout";
 import { Button } from "@/components/ui/button";
 import { SkinResultView } from "@/components/skin/SkinResultView";
+import { ViewReportButton } from "@/components/skin/ViewReportButton";
 import {
   META_KEYS,
   DEFAULT_RECO_THRESHOLD,
@@ -164,22 +165,11 @@ export default async function SkinAnalysisDetailPage({
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             {/* Primary CTA — highlighted so users know the full report lives
-                behind it. Filled, larger, with an icon and a pulsing beacon
-                dot that draws the eye toward it. */}
-            <span className="relative inline-flex">
-              <Button
-                asChild
-                className="shadow-md shadow-primary/30 ring-2 ring-primary/40 transition hover:ring-primary/60"
-              >
-                <Link href={`/account/skin-analysis/${analysis.id}/report`}>
-                  <FileText className="mr-2 h-4 w-4" /> View full report
-                </Link>
-              </Button>
-              <span className="pointer-events-none absolute -right-1.5 -top-1.5 flex h-3.5 w-3.5">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75" />
-                <span className="relative inline-flex h-3.5 w-3.5 rounded-full bg-rose-500" />
-              </span>
-            </span>
+                behind it, with an explicit loading state while the report
+                generates (see ViewReportButton). */}
+            <ViewReportButton
+              href={`/account/skin-analysis/${analysis.id}/report`}
+            />
             {prev ? (
               <Button asChild variant="outline" size="sm">
                 <Link

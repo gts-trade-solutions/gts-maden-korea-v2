@@ -43,6 +43,8 @@ export function SkinReport({
   concernSummaries,
   recommendations,
   recoReasons,
+  backHref,
+  backLabel,
 }: {
   analysisId: string;
   /** Pre-formatted on the server — formatting a date here would render
@@ -60,6 +62,9 @@ export function SkinReport({
   recommendations: Record<string, ProductData[]>;
   /** AI "why this product" blurb for each concern's hero product (may be empty). */
   recoReasons: Record<string, string>;
+  /** Where the "Back" toolbar link goes. Defaults to the owner's result page. */
+  backHref?: string;
+  backLabel?: string;
 }) {
   const overallRating = overall != null ? scoreRating(overall) : null;
 
@@ -79,8 +84,8 @@ export function SkinReport({
       {/* Toolbar — hidden when printing */}
       <div className="mx-auto mb-4 flex max-w-3xl items-center justify-between px-4 print:hidden">
         <Button asChild variant="ghost" size="sm">
-          <Link href={`/account/skin-analysis/${analysisId}`}>
-            <ArrowLeft className="mr-2 h-4 w-4" /> Back to result
+          <Link href={backHref ?? `/account/skin-analysis/${analysisId}`}>
+            <ArrowLeft className="mr-2 h-4 w-4" /> {backLabel ?? "Back to result"}
           </Link>
         </Button>
         <Button size="sm" onClick={() => window.print()}>
