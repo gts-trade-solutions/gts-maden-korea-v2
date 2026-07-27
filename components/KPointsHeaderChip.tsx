@@ -10,7 +10,14 @@ import { useAuth } from "@/lib/contexts/AuthContext";
  * Fetches once per auth change; re-fetches when the tab regains focus so a
  * fresh earn/spend shows up without a full reload.
  */
-export function KPointsHeaderChip({ className = "" }: { className?: string }) {
+export function KPointsHeaderChip({
+  className = "",
+  variant = "pill",
+}: {
+  className?: string;
+  /** "pill" = compact header chip; "menu" = full-width row for the mobile Sheet */
+  variant?: "pill" | "menu";
+}) {
   const { isAuthenticated, ready } = useAuth();
   const [points, setPoints] = useState<number | null>(null);
 
@@ -39,6 +46,26 @@ export function KPointsHeaderChip({ className = "" }: { className?: string }) {
   }, [ready, isAuthenticated]);
 
   if (!isAuthenticated || points === null) return null;
+
+  if (variant === "menu") {
+    return (
+      <Link
+        href="/account/k-points"
+        aria-label={`${points} K-Points`}
+        className={`flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-amber-900 transition-colors hover:bg-amber-100 ${className}`}
+      >
+        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white ring-1 ring-amber-200">
+          <KCoin className="h-6 w-6" />
+        </span>
+        <span className="flex flex-col leading-tight">
+          <span className="text-sm font-semibold">K-Points</span>
+          <span className="text-base font-bold tabular-nums">
+            {points.toLocaleString()}
+          </span>
+        </span>
+      </Link>
+    );
+  }
 
   return (
     <Link

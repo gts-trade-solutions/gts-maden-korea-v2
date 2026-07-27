@@ -498,6 +498,12 @@ export function Header() {
                   </div>
                 )}
 
+                {/* Live K-Points balance — shown here on mobile (the header
+                    chip is hidden below md). Renders nothing for guests. */}
+                <div className="px-5 pb-3">
+                  <KPointsHeaderChip variant="menu" className="w-full" />
+                </div>
+
                 <div className="px-5 pb-3 flex items-center gap-2 md:hidden">
                   {isAuthenticated && (
                     <Button asChild variant="outline" className="flex-1">
@@ -895,8 +901,11 @@ export function Header() {
               <CountrySwitcher />
             </div>
 
-            {/* Live K-Points balance — sits right next to the account button */}
-            <KPointsHeaderChip />
+            {/* Live K-Points balance — sits right next to the account button.
+                Hidden on mobile; it lives inside the hamburger menu there. */}
+            <div className="hidden md:inline-flex">
+              <KPointsHeaderChip />
+            </div>
 
             {isAuthenticated ? (
               <Button
