@@ -22,6 +22,7 @@ import {
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
+import { KCoin } from "@/components/k-points/KCoin";
 import { toast } from "sonner";
 import { ProductCard } from "@/components/ProductCard";
 import { resolveMediaUrl } from "@/lib/storage/backend";
@@ -190,6 +191,24 @@ export default function AccountPage() {
                 onClick={() => router.push("/account/skin-analysis")}
               >
                 View results
+              </Button>
+            </CardContent>
+          </Card>
+          <Card className="hover:shadow-lg transition-shadow cursor-pointer">
+            <CardHeader>
+              <KCoin className="h-8 w-8 mb-2" />
+              <CardTitle>K-Points</CardTitle>
+              <CardDescription>
+                Your reward points balance, history and ways to earn
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => router.push("/account/k-points")}
+              >
+                View K-Points
               </Button>
             </CardContent>
           </Card>

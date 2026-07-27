@@ -127,6 +127,30 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // K-Points review bonus — verified purchases only (abuse guard; one review
+    // per product per user is enforced by the unique constraint). Idempotent
+    // per review id. Best-effort. If a moderation workflow is added later, move
+    // this to the approval step.
+    if (isVerifiedPurchase) {
+      try {
+        const { getEarnRule } = await import("@/lib/k-points/config");
+        const { earn } = await import("@/lib/k-points/service");
+        const rule = await getEarnRule("review");
+        if (rule.enabled && rule.value > 0) {
+          await earn({
+            userId,
+            points: Math.floor(rule.value),
+            reason: "review",
+            sourceType: "review",
+            sourceId: reviewId,
+            meta: { productId },
+          });
+        }
+      } catch (e) {
+        console.error("[reviews/create] k-points review bonus failed:", e);
+      }
+    }
+
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     return NextResponse.json(

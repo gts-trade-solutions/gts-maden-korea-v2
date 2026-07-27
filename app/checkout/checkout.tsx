@@ -60,6 +60,13 @@ type CalcTotals = {
   total: number;
   sale_savings?: number;
   allocations?: Record<string, number>;
+  // K-Points redemption (INR-canonical)
+  points_balance?: number;
+  points_max_redeemable?: number;
+  points_applied?: number;
+  points_discount?: number;
+  points_per_unit?: number;
+  redeem_cap_percent?: number;
   applied: null | {
     type: "promo" | "referral";
     code?: string;
@@ -134,6 +141,9 @@ export default function CheckoutPage() {
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [confirmingPayment, setConfirmingPayment] = useState(false);
+  // K-Points the customer has chosen to redeem this order.
+  const [redeemPoints, setRedeemPoints] = useState(0);
+  const [redeemOn, setRedeemOn] = useState(false);
   const [dbProducts, setDbProducts] = useState<Record<string, DbProduct>>({});
   const [loadingProducts, setLoadingProducts] = useState(true);
 
@@ -345,13 +355,16 @@ export default function CheckoutPage() {
     const mySeq = ++totalsSeq.current;
 
     setLoadingTotals(true);
-    setCalc(null);
+    // NOTE: do NOT clear `calc` here. Blanking it unmounts the summary (and the
+    // K-Points slider) on every recompute, which breaks dragging. Keep the last
+    // totals visible (stale-while-revalidate); errors below clear it explicitly.
     setCalcError(null);
 
     const payload = {
       lines: items.map((i) => ({ product_id: i.product_id, qty: i.quantity })),
       shippingFee: shippingCost,
       explain: debug,
+      redeemPoints: redeemOn ? redeemPoints : 0,
     };
 
     console.log(`[TOTALS][${mySeq}] -> POST /api/checkout/calc-totals`, {
@@ -397,9 +410,12 @@ export default function CheckoutPage() {
   };
 
   useEffect(() => {
-    askTotals("mount/dep-change");
+    // Debounced so dragging the K-Points slider doesn't fire a request per
+    // pixel; the last value wins (stale responses are dropped via totalsSeq).
+    const t = setTimeout(() => askTotals("mount/dep-change"), 250);
+    return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, shippingCost]);
+  }, [items, shippingCost, redeemPoints, redeemOn]);
 
   // Delivery ETA fetcher. Re-runs whenever the destination country
   // changes, or — for Indian addresses only — when the customer
@@ -674,10 +690,11 @@ export default function CheckoutPage() {
 
       await start(
         addressSnapshot,
-        calc?.applied ?? null,
+        (calc?.applied ?? null) as any,
         calc?.total ?? null,
         calc?.shipping_fee ?? shippingCost,
-        () => setConfirmingPayment(true)
+        () => setConfirmingPayment(true),
+        redeemOn ? redeemPoints : 0
       );
     } finally {
       setIsProcessing(false);
@@ -1089,7 +1106,7 @@ export default function CheckoutPage() {
                           </>
                         )}
                     </div>
-                  ) : loadingTotals || !calc ? (
+                  ) : !calc ? (
                     <TotalsSkeleton />
                   ) : (
                     <>
@@ -1199,6 +1216,75 @@ export default function CheckoutPage() {
                           <span>{t("promoDiscount")}</span>
                           <span className="font-semibold">
                             - {formatPrice(calc.discount_total)}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* K-Points redemption */}
+                      {(calc.points_balance ?? 0) > 0 &&
+                        (calc.points_max_redeemable ?? 0) > 0 && (
+                          <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-3">
+                            <div className="flex items-center justify-between">
+                              <label className="flex items-center gap-2 text-sm font-medium">
+                                <input
+                                  type="checkbox"
+                                  checked={redeemOn}
+                                  onChange={(e) => {
+                                    setRedeemOn(e.target.checked);
+                                    if (e.target.checked && redeemPoints === 0)
+                                      setRedeemPoints(calc.points_max_redeemable ?? 0);
+                                  }}
+                                />
+                                Use K-Points
+                              </label>
+                              <span className="text-xs text-muted-foreground">
+                                {(calc.points_balance ?? 0).toLocaleString()} available
+                              </span>
+                            </div>
+                            {redeemOn && (
+                              <div className="mt-2">
+                                <input
+                                  type="range"
+                                  min={0}
+                                  max={calc.points_max_redeemable ?? 0}
+                                  step={1}
+                                  value={Math.min(
+                                    redeemPoints,
+                                    calc.points_max_redeemable ?? 0,
+                                  )}
+                                  onChange={(e) => setRedeemPoints(Number(e.target.value))}
+                                  className="w-full accent-amber-500"
+                                />
+                                <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground">
+                                  <span>
+                                    {Math.min(
+                                      redeemPoints,
+                                      calc.points_max_redeemable ?? 0,
+                                    ).toLocaleString()}{" "}
+                                    pts{loadingTotals ? " · updating…" : " applied"}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="font-medium text-amber-700 underline"
+                                    onClick={() =>
+                                      setRedeemPoints(calc.points_max_redeemable ?? 0)
+                                    }
+                                  >
+                                    Use max
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                      {(calc.points_discount ?? 0) > 0 && (
+                        <div className="flex justify-between text-amber-700">
+                          <span>
+                            K-Points ({(calc.points_applied ?? 0).toLocaleString()})
+                          </span>
+                          <span className="font-semibold">
+                            - {formatPrice(calc.points_discount ?? 0)}
                           </span>
                         </div>
                       )}

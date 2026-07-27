@@ -18,6 +18,11 @@ import {
 import { isSupportedCountry, DEFAULT_COUNTRY } from "@/lib/countries";
 import { requireEmailVerified } from "@/lib/auth/emailVerification";
 
+// Razorpay's minimum chargeable order amount (₹1). A total below this — an
+// exact ₹0 or a sub-₹1 redemption residual — can't be charged, so it completes
+// as a free (points-only) order instead. Keep in sync with the verify route.
+const MIN_CHARGE_INR = 1;
+
 export async function POST(req: NextRequest) {
   try {
     const userId = (await getRouteUser(req))?.id ?? null;
@@ -106,6 +111,9 @@ export async function POST(req: NextRequest) {
     let subtotalInr = roundMoney(Number(order.subtotal) || 0);
     let discountInr = roundMoney(Number(order.discount_total) || 0);
     let shippingInr = roundMoney(Number(order.shipping_fee) || 0);
+    // K-Points redemption reserved at order-create — a fixed INR discount that
+    // must reduce the charge (it is NOT recomputed anywhere downstream).
+    const redeemInr = roundMoney(Number((order as any).points_redeemed_amount) || 0);
 
     if (isIntl) {
       // Pull cart-line weights for the products in this order. We
@@ -178,7 +186,7 @@ export async function POST(req: NextRequest) {
       shippingInr = roundMoney(result.amountInr);
     }
 
-    const totalInr = roundMoney(subtotalInr + shippingInr - discountInr);
+    const totalInr = roundMoney(subtotalInr + shippingInr - discountInr - redeemInr);
 
     // FX rate snapshot. INR keeps a rate of 1.0; international buyers
     // get whatever the current `currency_rates` row says, with the
@@ -279,6 +287,16 @@ export async function POST(req: NextRequest) {
           notes.commission_percent = commissionPercent;
         }
       }
+    }
+
+    // Fully paid by K-Points → the remaining amount is at or below Razorpay's
+    // minimum chargeable amount (₹1). This includes an exact ₹0 total AND the
+    // sub-₹1 residual that points-to-money rounding can leave when redeeming
+    // ~100% with free shipping. Razorpay rejects anything under ₹1, so skip it
+    // and finalize via the verify route's `free` path (the tiny residual, if
+    // any, is waived). MIN_CHARGE_INR must match the verify free-gate.
+    if (totalInr < MIN_CHARGE_INR) {
+      return NextResponse.json({ ok: true, free: true, order_id: order.id });
     }
 
     const razorpay = new Razorpay({

@@ -23,6 +23,7 @@ import {
   Star,
 } from "lucide-react";
 import { CONCERN_INFO } from "@/lib/integrations/skinConcerns";
+import { KCoin } from "@/components/k-points/KCoin";
 
 type Status =
   | { authed: false }
@@ -34,6 +35,8 @@ type Status =
         | { status: "none" };
       lastAnalysisId: string | null;
       pendingRequest: boolean;
+      pointsCost?: number;
+      pointsBalance?: number;
     };
 
 const STEPS = [
@@ -248,6 +251,9 @@ export default function SkinAnalyzerPage() {
     }
 
     const { state, lastAnalysisId, pendingRequest } = status;
+    const cost = status.pointsCost ?? 0;
+    const balance = status.pointsBalance ?? 0;
+    const gated = cost > 0;
     const viewLast = lastAnalysisId ? (
       <Button asChild variant="ghost" size="sm" className="w-full">
         <Link href="/account/skin-analysis">View your past results</Link>
@@ -270,8 +276,43 @@ export default function SkinAnalyzerPage() {
             )}
             {state.status === "reserved"
               ? "Continue your analysis"
-              : "Analyze my skin — free"}
+              : gated
+                ? "Analyze my skin"
+                : "Analyze my skin — free"}
           </Button>
+          {viewLast}
+        </div>
+      );
+    }
+
+    // Points-gated: no free scan. Spend K-Points to unlock one, or top up.
+    if (gated) {
+      const canAfford = balance >= cost;
+      return (
+        <div className="space-y-2">
+          <Button
+            onClick={canAfford ? start : undefined}
+            disabled={starting || !canAfford}
+            size="lg"
+            className="w-full"
+          >
+            {starting ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <KCoin className="mr-2 h-4 w-4" />
+            )}
+            {`Analyze my skin — ${cost.toLocaleString()} K-Points`}
+          </Button>
+          <p className="text-center text-xs text-muted-foreground">
+            {canAfford
+              ? `You have ${balance.toLocaleString()} K-Points`
+              : `You have ${balance.toLocaleString()} — you need ${cost.toLocaleString()}`}
+          </p>
+          {!canAfford ? (
+            <Button asChild variant="outline" size="lg" className="w-full">
+              <Link href="/account/k-points">Get K-Points</Link>
+            </Button>
+          ) : null}
           {viewLast}
         </div>
       );
@@ -315,6 +356,9 @@ export default function SkinAnalyzerPage() {
       );
     }
     const { state, pendingRequest } = status;
+    const cost = status.pointsCost ?? 0;
+    const balance = status.pointsBalance ?? 0;
+    const gated = cost > 0;
     if (state.status === "ready" || state.status === "reserved") {
       return (
         <Button onClick={start} disabled={starting} className="w-full">
@@ -325,7 +369,31 @@ export default function SkinAnalyzerPage() {
           )}
           {state.status === "reserved"
             ? "Continue analysis"
-            : "Analyze my skin — free"}
+            : gated
+              ? "Analyze my skin"
+              : "Analyze my skin — free"}
+        </Button>
+      );
+    }
+    if (gated) {
+      const canAfford = balance >= cost;
+      if (!canAfford) {
+        return (
+          <Button asChild className="w-full">
+            <Link href="/account/k-points">
+              <KCoin className="mr-2 h-4 w-4" /> Get K-Points
+            </Link>
+          </Button>
+        );
+      }
+      return (
+        <Button onClick={start} disabled={starting} className="w-full">
+          {starting ? (
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          ) : (
+            <KCoin className="mr-2 h-4 w-4" />
+          )}
+          {`Analyze — ${cost.toLocaleString()} K-Points`}
         </Button>
       );
     }

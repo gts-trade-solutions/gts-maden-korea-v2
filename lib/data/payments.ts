@@ -14,15 +14,16 @@ export type PaymentOrder = {
   id: string; user_id: string;
   subtotal: number; shipping_fee: number; discount_total: number; total: number;
   currency: string; status: string;
+  points_redeemed_amount: number; points_redeemed_qty: number;
 };
 
 export async function getOrderForPayment(orderId: string): Promise<PaymentOrder | null> {
   const o = await prisma.orders.findUnique({
     where: { id: orderId },
-    select: { id: true, user_id: true, subtotal: true, shipping_fee: true, discount_total: true, total: true, currency: true, status: true },
+    select: { id: true, user_id: true, subtotal: true, shipping_fee: true, discount_total: true, total: true, currency: true, status: true, points_redeemed_amount: true, points_redeemed_qty: true },
   });
   if (!o) return null;
-  return { id: o.id, user_id: o.user_id as string, subtotal: num(o.subtotal), shipping_fee: num(o.shipping_fee), discount_total: num(o.discount_total), total: num(o.total), currency: (o.currency as string) ?? "INR", status: o.status as string };
+  return { id: o.id, user_id: o.user_id as string, subtotal: num(o.subtotal), shipping_fee: num(o.shipping_fee), discount_total: num(o.discount_total), total: num(o.total), currency: (o.currency as string) ?? "INR", status: o.status as string, points_redeemed_amount: num((o as any).points_redeemed_amount), points_redeemed_qty: num((o as any).points_redeemed_qty) };
 }
 
 // The caller's update object maps directly to columns (numbers for Decimal,

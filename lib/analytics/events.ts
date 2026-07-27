@@ -20,6 +20,10 @@ export const KNOWN_EVENTS = [
   "login",
   "logout",
   "promo_applied",
+  "points_earned",
+  "points_redeemed",
+  "points_purchased",
+  "points_skin_access",
 ] as const;
 
 export type KnownEvent = (typeof KNOWN_EVENTS)[number];

@@ -87,7 +87,9 @@ export async function POST(req: NextRequest) {
       app_order_id,
       raw,
       __debug,
+      free, // true = fully paid by K-Points (₹0), no Razorpay charge
     } = body || {};
+    const isFree = free === true;
     const WANT_DEBUG = ALLOW_DEBUG && (DEBUG || !!__debug);
 
     dbg.push({
@@ -98,40 +100,47 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    if (
-      !razorpay_order_id ||
-      !razorpay_payment_id ||
-      !razorpay_signature ||
-      !app_order_id
-    ) {
-      const res = {
-        ok: false,
-        error: "Missing fields",
-        debug: WANT_DEBUG ? dbg : undefined,
-      };
-      return NextResponse.json(res, { status: 400 });
-    }
+    // Free (₹0, points-only) orders carry no Razorpay ids/signature — only the
+    // app order id. Their legitimacy is re-checked server-side below (the order
+    // row's total_inr must be ≤ 0). Paid orders require the full signature set.
+    if (isFree) {
+      if (!app_order_id) {
+        return NextResponse.json(
+          { ok: false, error: "Missing fields", debug: WANT_DEBUG ? dbg : undefined },
+          { status: 400 },
+        );
+      }
+    } else {
+      if (
+        !razorpay_order_id ||
+        !razorpay_payment_id ||
+        !razorpay_signature ||
+        !app_order_id
+      ) {
+        const res = {
+          ok: false,
+          error: "Missing fields",
+          debug: WANT_DEBUG ? dbg : undefined,
+        };
+        return NextResponse.json(res, { status: 400 });
+      }
 
-    // 1) Verify signature
-    const expected = crypto
-      .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET!)
-      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
-      .digest("hex");
+      // 1) Verify signature
+      const expected = crypto
+        .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET!)
+        .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+        .digest("hex");
 
-    const sigOk = expected === razorpay_signature;
-    dbg.push({
-      step: "sig",
-      expected,
-      provided: razorpay_signature,
-      ok: sigOk,
-    });
-    if (!sigOk) {
-      const res = {
-        ok: false,
-        error: "Invalid signature",
-        debug: WANT_DEBUG ? dbg : undefined,
-      };
-      return NextResponse.json(res, { status: 400 });
+      const sigOk = expected === razorpay_signature;
+      dbg.push({ step: "sig", expected, provided: razorpay_signature, ok: sigOk });
+      if (!sigOk) {
+        const res = {
+          ok: false,
+          error: "Invalid signature",
+          debug: WANT_DEBUG ? dbg : undefined,
+        };
+        return NextResponse.json(res, { status: 400 });
+      }
     }
 
     // Payment finalization (order load + mark-paid, payment record,
@@ -166,6 +175,8 @@ export async function POST(req: NextRequest) {
           address_snapshot: true,
           promo_code_id: true,
           promo_snapshot: true,
+          points_redeemed_amount: true,
+          points_redeemed_qty: true,
         },
       })
       .catch((e: any) => {
@@ -198,6 +209,21 @@ export async function POST(req: NextRequest) {
         debug: WANT_DEBUG ? dbg : undefined,
       };
       return NextResponse.json(res, { status: 400 });
+    }
+
+    // Free path is only valid when the order's remaining total is below the
+    // payment minimum (₹1) — re-checked server-side so a client can't claim
+    // "free" on a payable order. Matches MIN_CHARGE_INR in razorpay/create.
+    if (isFree) {
+      const orderTotalInr = Number(
+        (order as any).total_inr ?? (order.currency === "INR" ? order.total : NaN),
+      );
+      if (!(orderTotalInr < 1)) {
+        return NextResponse.json(
+          { ok: false, error: "Order is not free", debug: WANT_DEBUG ? dbg : undefined },
+          { status: 400 },
+        );
+      }
     }
 
     // Order currency in a type-narrowed form. Used in every downstream
@@ -291,9 +317,10 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Fetch RZP order (to get notes + amount_paid)
+    // Fetch RZP order (to get notes + amount_paid). Skipped for free orders,
+    // which have no Razorpay order.
     let ro: any = null;
-    {
+    if (!isFree && razorpay_order_id) {
       const key_id = process.env.RAZORPAY_KEY_ID!;
       const key_secret = process.env.RAZORPAY_KEY_SECRET!;
       const auth = Buffer.from(`${key_id}:${key_secret}`).toString("base64");
@@ -427,8 +454,10 @@ export async function POST(req: NextRequest) {
     // order's currency. For INR/USD/EUR/etc that's × 100; for VND
     // (zero-decimal) it's × 1. The exponent helper picks the right
     // divisor so non-INR orders read back the correct major-unit total.
-    const paidAmount =
-      ro && typeof ro.amount_paid === "number"
+    // Free (points-only) orders were charged nothing in money.
+    const paidAmount = isFree
+      ? 0
+      : ro && typeof ro.amount_paid === "number"
         ? money(fromRazorpayMinorUnits(ro.amount_paid, orderCurrency))
         : computedFinal;
 
@@ -439,8 +468,11 @@ export async function POST(req: NextRequest) {
         status: "paid",
         discount_total: discountAmount,
         total: paidAmount,
-        payment_provider: "razorpay",
-        payment_reference: razorpay_payment_id,
+        // Free orders paid nothing in money — zero the INR total too (create may
+        // have persisted a sub-₹1 residual that was waived).
+        ...(isFree ? { total_inr: 0 } : {}),
+        payment_provider: isFree ? "k_points" : "razorpay",
+        payment_reference: isFree ? `kpoints:${order.id}` : razorpay_payment_id,
         payment_meta: raw ? { raw } : null,
         paid_at: new Date(),
       });
@@ -633,6 +665,76 @@ export async function POST(req: NextRequest) {
         dbg.push({ step: "cart.clear" });
       } catch (e: any) {
         dbg.push({ step: "cart.clear", error: e?.message });
+      }
+    }
+
+    // 8a2) Settle any reserved K-Points redemption for this order (best-effort,
+    // idempotent). The reduced amount was already charged at create time.
+    if (order.user_id) {
+      try {
+        const qty = Number((order as any).points_redeemed_qty) || 0;
+        if (qty > 0) {
+          const { settle } = await import("@/lib/k-points/service");
+          await settle(order.id, qty);
+          dbg.push({ step: "kpoints.settle", qty });
+        }
+      } catch (e: any) {
+        dbg.push({ step: "kpoints.settle", error: e?.message });
+      }
+    }
+
+    // 8b) Credit K-Points earned on this purchase (best-effort, idempotent
+    // per order id). Earn on the net INR paid (excludes any points-redeemed
+    // portion; that column is 0 until the redemption phase ships).
+    if (order.user_id) {
+      try {
+        const { getEarnRule, getKPointsSettings } = await import("@/lib/k-points/config");
+        const { earn, pointsForSpendInr } = await import("@/lib/k-points/service");
+        const rule = await getEarnRule("purchase");
+        if (rule.enabled) {
+          const settings = await getKPointsSettings();
+          const redeemedInr = Number((order as any).points_redeemed_amount ?? 0) || 0;
+          const netInr = settings.earnOnNet ? baseInr - redeemedInr : baseInr;
+          const pts = await pointsForSpendInr(Math.max(0, netInr), rule);
+          if (pts > 0) {
+            await earn({
+              userId: order.user_id,
+              points: pts,
+              reason: "purchase",
+              sourceType: "order",
+              sourceId: order.id,
+              meta: { orderNumber: order.order_number ?? null, netInr },
+            });
+            dbg.push({ step: "kpoints.earn", points: pts });
+          }
+        }
+      } catch (e: any) {
+        dbg.push({ step: "kpoints.earn", error: e?.message });
+      }
+    }
+
+    // 8b2) Referral bonus for the buyer on an attributed (referred) order.
+    if (order.user_id && influencerId) {
+      try {
+        const { getEarnRule } = await import("@/lib/k-points/config");
+        const { earn, pointsForSpendInr } = await import("@/lib/k-points/service");
+        const rule = await getEarnRule("referral");
+        if (rule.enabled) {
+          const pts = await pointsForSpendInr(Math.max(0, baseInr), rule);
+          if (pts > 0) {
+            await earn({
+              userId: order.user_id,
+              points: pts,
+              reason: "referral",
+              sourceType: "order",
+              sourceId: order.id,
+              meta: { influencerId },
+            });
+            dbg.push({ step: "kpoints.referral", points: pts });
+          }
+        }
+      } catch (e: any) {
+        dbg.push({ step: "kpoints.referral", error: e?.message });
       }
     }
 

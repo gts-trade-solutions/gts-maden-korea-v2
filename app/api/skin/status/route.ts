@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth/session";
 import { getAccessState } from "@/lib/integrations/skinEntitlement";
 import { prisma } from "@/lib/db/prisma";
+import { getKPointsSettings } from "@/lib/k-points/config";
+import { getBalance } from "@/lib/k-points/service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,7 +16,7 @@ export async function GET() {
 
   const state = await getAccessState(user.id);
 
-  const [last, pendingRequest] = await Promise.all([
+  const [last, pendingRequest, settings, balance] = await Promise.all([
     prisma.skinAnalysis.findFirst({
       where: { userId: user.id, status: "done" },
       orderBy: { createdAt: "desc" },
@@ -23,6 +25,8 @@ export async function GET() {
     prisma.skinAccessRequest.count({
       where: { userId: user.id, status: "pending" },
     }),
+    getKPointsSettings(),
+    getBalance(user.id),
   ]);
 
   return NextResponse.json({
@@ -30,5 +34,8 @@ export async function GET() {
     state,
     lastAnalysisId: last?.id ?? null,
     pendingRequest: pendingRequest > 0,
+    // K-Points gating for the analyzer CTA
+    pointsCost: settings.skinAnalyzerCostPoints,
+    pointsBalance: balance.available,
   });
 }

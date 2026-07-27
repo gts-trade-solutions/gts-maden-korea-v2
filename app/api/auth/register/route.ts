@@ -52,5 +52,23 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "MYSQL_CREATE_FAILED" }, { status: 500 });
   }
 
+  // K-Points signup bonus (best-effort, idempotent per user id). Flat points.
+  try {
+    const { getEarnRule } = await import("@/lib/k-points/config");
+    const { earn } = await import("@/lib/k-points/service");
+    const rule = await getEarnRule("signup");
+    if (rule.enabled && rule.value > 0) {
+      await earn({
+        userId: id,
+        points: Math.floor(rule.value),
+        reason: "signup",
+        sourceType: "user",
+        sourceId: id,
+      });
+    }
+  } catch (e) {
+    console.error("[register] k-points signup bonus failed:", e);
+  }
+
   return NextResponse.json({ ok: true, id });
 }

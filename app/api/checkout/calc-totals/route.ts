@@ -5,6 +5,7 @@ import { getPromoCodeFromCookie } from "@/lib/promo-cookie";
 import {
   roundMoney,
   isSupportedCurrency,
+  FALLBACK_RATES,
   type CurrencyCode,
 } from "@/lib/currency";
 import { computeShippingFee } from "@/lib/membership";
@@ -342,7 +343,53 @@ const lines: LineInput[] = Array.isArray(body?.lines) ? body.lines : [];
     );
   }
 
-  const total = roundMoney(subtotal + shipping_fee_inr - discount_total);
+  const payableBeforeRedeem = roundMoney(subtotal + shipping_fee_inr - discount_total);
+  // K-Points may only offset the PRODUCT cost (subtotal − promo discount);
+  // shipping is always paid in full, so it is excluded from the redeem base.
+  const redeemBaseInr = roundMoney(Math.max(0, subtotal - discount_total));
+
+  // ── K-Points redemption preview (INR-canonical) ──
+  // Only computed when the caller passes redeemPoints; guests/degraded config
+  // resolve to zero so existing checkout behaviour is unchanged.
+  const requestedPoints = Math.max(0, Math.floor(Number(body?.redeemPoints) || 0));
+  let redeem = {
+    balance: 0,
+    maxPoints: 0,
+    appliedPoints: 0,
+    valueInr: 0,
+    pointsPerUnit: 0,
+    capPercent: 0,
+  };
+  try {
+    const { computeRedeemQuote } = await import("@/lib/k-points/service");
+    let fx = 1;
+    if (buyerCurrency !== "INR") {
+      const { getCurrencyRate } = await import("@/lib/data/payments");
+      fx =
+        Number(await getCurrencyRate(buyerCurrency)) ||
+        FALLBACK_RATES[buyerCurrency as CurrencyCode]?.rate_from_inr ||
+        1;
+    }
+    const q = await computeRedeemQuote({
+      userId,
+      requestedPoints,
+      payableInr: redeemBaseInr, // product cost only — shipping never redeemable
+      buyerCurrency,
+      fxRate: fx,
+    });
+    redeem = {
+      balance: q.balance,
+      maxPoints: q.maxPoints,
+      appliedPoints: q.appliedPoints,
+      valueInr: q.valueInr,
+      pointsPerUnit: q.pointsPerUnit,
+      capPercent: q.capPercent,
+    };
+  } catch {
+    /* degrade: no redemption */
+  }
+
+  const total = roundMoney(payableBeforeRedeem - redeem.valueInr);
 
   // Response amounts are in INR — the storefront's `useCurrency()`
   // hook converts to the buyer's currency at render-time via
@@ -376,5 +423,12 @@ const lines: LineInput[] = Array.isArray(body?.lines) ? body.lines : [];
       : null,
     shipping_slab: shippingSlab,
     lines: lineResults,
+    // K-Points redemption (INR-canonical, like the other amounts)
+    points_balance: redeem.balance,
+    points_max_redeemable: redeem.maxPoints,
+    points_applied: redeem.appliedPoints,
+    points_discount: redeem.valueInr,
+    points_per_unit: redeem.pointsPerUnit,
+    redeem_cap_percent: redeem.capPercent,
   });
 }

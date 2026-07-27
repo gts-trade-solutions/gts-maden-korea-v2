@@ -24,6 +24,7 @@ import { useWishlist } from "@/lib/contexts/WishlistContext";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import { Sheet, SheetContent, SheetTrigger } from "./ui/sheet";
+import { KPointsHeaderChip } from "./KPointsHeaderChip";
 import {
   NavigationMenu,
   NavigationMenuList,
@@ -893,6 +894,9 @@ export function Header() {
             <div className="hidden md:inline-flex">
               <CountrySwitcher />
             </div>
+
+            {/* Live K-Points balance — sits right next to the account button */}
+            <KPointsHeaderChip />
 
             {isAuthenticated ? (
               <Button

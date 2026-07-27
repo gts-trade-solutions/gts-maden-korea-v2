@@ -22,16 +22,36 @@ export type SkinAccessState =
   | { status: "reserved"; grantId: string } // an active reservation exists
   | { status: "none" }; // out of scans → must request access
 
-/** Release any reservations whose TTL has passed (lazy expiry — no cron). */
+/**
+ * Release reservations whose TTL has passed (lazy expiry — no cron). The scan
+ * returns to `available` so an abandoned start isn't lost — important now that
+ * a scan can be paid for with K-Points (losing it would burn the user's
+ * points). A consumed scan is already `consumed`, so it's untouched.
+ */
 async function releaseExpired(userId: string): Promise<void> {
   await prisma.skinEntitlement.updateMany({
     where: { userId, state: "reserved", expiresAt: { lt: new Date() } },
-    data: { state: "released", releasedAt: new Date() },
+    // Keep `reservedAt` so we remember this scan was already started — the UI
+    // then shows "Continue" rather than treating it as a fresh scan. Only the
+    // TTL (`expiresAt`) is cleared.
+    data: { state: "available", expiresAt: null },
   });
 }
 
-/** Seed the single free scan the first time we ever see this user. */
+/**
+ * Seed the single free scan the first time we ever see this user — but ONLY
+ * while the analyzer is not points-gated. Once the admin sets
+ * `skinAnalyzerCostPoints > 0` (see K_POINTS.md), access must be paid with
+ * K-Points (or admin-granted), so no free scan is seeded.
+ */
 async function seedFreeIfNew(userId: string): Promise<void> {
+  try {
+    const { getKPointsSettings } = await import("@/lib/k-points/config");
+    const settings = await getKPointsSettings();
+    if (settings.skinAnalyzerCostPoints > 0) return; // points-gated → no free scan
+  } catch {
+    /* config unreadable → fall back to seeding free (safe default) */
+  }
   const everHad = await prisma.skinEntitlement.count({ where: { userId } });
   if (everHad === 0) {
     await prisma.skinEntitlement.create({
@@ -42,19 +62,28 @@ async function seedFreeIfNew(userId: string): Promise<void> {
 
 export async function getAccessState(userId: string): Promise<SkinAccessState> {
   await releaseExpired(userId);
-  const reserved = await prisma.skinEntitlement.findFirst({
-    where: { userId, state: "reserved" },
+  // "Open" analysis = actively reserved OR a previously-started scan that
+  // lapsed back to available (reservedAt is set). Both should show "Continue".
+  const open = await prisma.skinEntitlement.findFirst({
+    where: {
+      userId,
+      OR: [
+        { state: "reserved" },
+        { state: "available", reservedAt: { not: null } },
+      ],
+    },
     orderBy: { reservedAt: "desc" },
   });
-  if (reserved) return { status: "reserved", grantId: reserved.id };
+  if (open) return { status: "reserved", grantId: open.id };
 
+  // Only genuinely fresh (never-started) scans count toward "ready".
   let available = await prisma.skinEntitlement.count({
-    where: { userId, state: "available" },
+    where: { userId, state: "available", reservedAt: null },
   });
   if (available === 0) {
     await seedFreeIfNew(userId);
     available = await prisma.skinEntitlement.count({
-      where: { userId, state: "available" },
+      where: { userId, state: "available", reservedAt: null },
     });
   }
   if (available > 0) return { status: "ready", remaining: available };
@@ -124,10 +153,10 @@ export async function consume(
   return !!row && row.state === "consumed" && row.analysisId === analysisId;
 }
 
-/** Grant an extra scan (admin approval of a request). */
+/** Grant an extra scan (admin approval of a request, or a points purchase). */
 export async function grant(
   userId: string,
-  source: "granted" | "free" = "granted",
+  source: "granted" | "free" | "points" = "granted",
 ): Promise<void> {
   await prisma.skinEntitlement.create({
     data: { userId, state: "available", source },

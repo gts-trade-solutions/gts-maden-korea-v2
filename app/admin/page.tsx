@@ -35,6 +35,7 @@ import {
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
+import { KCoin } from "@/components/k-points/KCoin";
 import { toast } from "sonner";
 
 type DashboardMetrics = {
@@ -366,6 +367,28 @@ export default function AdminDashboard() {
                 onClick={() => router.push("/admin/skin-analysis/recommendations")}
               >
                 Product recommendations
+              </Button>
+            </CardContent>
+          </Card>
+
+          {/* K-Points */}
+          <Card className="hover:shadow-lg transition-shadow">
+            <CardHeader>
+              <KCoin className="h-8 w-8 mb-2" />
+              <CardTitle>K-Points</CardTitle>
+              <CardDescription>Reward points economics & balances</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <p className="text-sm text-muted-foreground mb-4">
+                Configure earn rules, per-currency valuation and redemption caps;
+                view balances and give points to users directly.
+              </p>
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => router.push("/admin/k-points")}
+              >
+                Manage K-Points
               </Button>
             </CardContent>
           </Card>

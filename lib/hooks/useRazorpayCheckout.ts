@@ -40,12 +40,27 @@ export function useRazorpayCheckout() {
   // the user manually refreshes.
   const cart = useCart();
 
+  // Return any reserved K-Points to the user's balance when a checkout is
+  // abandoned/failed (best-effort; the endpoint is a no-op if none reserved).
+  const releasePoints = async (orderId: string) => {
+    try {
+      await fetch("/api/points/release", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId }),
+      });
+    } catch {
+      /* the TTL cron will sweep it if this fails */
+    }
+  };
+
   const start = async (
     address: AddressSnapshot = null,
     attribution: AttributionSnapshot = null,
     uiTotal?: number | null,
     uiShippingFee?: number | null,
-    onConfirming?: () => void
+    onConfirming?: () => void,
+    redeemPoints: number = 0
   ) => {
     if (busyRef.current) return;
     busyRef.current = true;
@@ -57,7 +72,11 @@ export function useRazorpayCheckout() {
       const createRes = await fetch("/api/orders/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address: address ?? null, notes: null }),
+        body: JSON.stringify({
+          address: address ?? null,
+          notes: null,
+          redeemPoints: Math.max(0, Math.floor(redeemPoints || 0)),
+        }),
       });
       const createJson = await createRes.json().catch(() => ({} as any));
 
@@ -87,7 +106,57 @@ export function useRazorpayCheckout() {
 
       const j = await res.json().catch(() => ({}));
 
+      // Fully paid by K-Points (₹0 total) — no Razorpay charge. Finalize the
+      // order via the verify route's `free` path (which settles the points and
+      // runs all the normal post-payment side effects).
+      if (res.ok && j?.free) {
+        try {
+          onConfirming?.();
+        } catch {}
+        try {
+          const verify = await fetch("/api/razorpay/verify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ app_order_id: info.order_id, free: true }),
+          });
+          const vj = await verify.json().catch(() => ({}));
+          if (!verify.ok || !vj?.ok) {
+            await releasePoints(info.order_id);
+            toast.error(vj?.error || "Could not complete order");
+            router.replace(
+              `/order/failure?reason=verification&order_id=${encodeURIComponent(info.order_id)}`
+            );
+            return;
+          }
+          const successOrderId = vj.order_id || info.order_id;
+          try {
+            if (typeof window !== "undefined") {
+              sessionStorage.setItem("last_success_order_id", successOrderId);
+              sessionStorage.setItem("payment_success_redirecting", "1");
+            }
+          } catch {}
+          router.replace(`/order/success?order=${encodeURIComponent(successOrderId)}`);
+          void (async () => {
+            try {
+              await cart.clear();
+              if (typeof window !== "undefined") {
+                localStorage.setItem("guest_cart_v1", "[]");
+                sessionStorage.removeItem("guest_cart_v1");
+              }
+            } catch {}
+          })();
+        } catch (e: any) {
+          await releasePoints(info.order_id);
+          toast.error(e?.message || "Could not complete order");
+        } finally {
+          busyRef.current = false;
+        }
+        return;
+      }
+
       if (!res.ok || !j?.razorpay_order?.id) {
+        // Razorpay init failed — return any reserved K-Points before bailing.
+        await releasePoints(info.order_id);
         toast.error(j?.error ? String(j.error) : "Payment init failed");
         busyRef.current = false;
         return;
@@ -225,6 +294,8 @@ export function useRazorpayCheckout() {
               order_id: info.order_id,
               razorpay_order_id: razorpay_order.id,
             });
+            // Payment not completed → return the reserved K-Points now.
+            void releasePoints(info.order_id);
             router.replace(
               `/order/failure?reason=cancelled&order_id=${encodeURIComponent(
                 info.order_id
@@ -247,6 +318,8 @@ export function useRazorpayCheckout() {
         toast.error(
           resp?.error?.description || resp?.error?.reason || "Payment failed"
         );
+        // Payment failed → return the reserved K-Points now.
+        void releasePoints(info.order_id);
         trackEvent("payment_failed", {
           order_id: info.order_id,
           razorpay_order_id: razorpay_order.id,
