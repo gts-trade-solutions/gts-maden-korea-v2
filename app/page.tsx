@@ -9,6 +9,7 @@ import { getBrandsForCarousel } from "./_data/getBrands";
 import { InstagramVideoCarousel } from "@/components/home/InstagramVideoCarousel";
 import { getInfluencerVideos } from "./_data/getInfluencerVideos";
 import HomeVideoCarouselSection from "@/components/home/HomeVideoCarouselSection";
+import { SkinAnalyzerPromoModal } from "@/components/home/SkinAnalyzerPromoModal";
 import CertificationSwiper from "@/components/Cetifications";
 import { getTranslations, getLocale } from "next-intl/server";
 import { isSupportedCountry, DEFAULT_COUNTRY } from "@/lib/countries";
@@ -269,6 +270,9 @@ export default async function Home() {
           dangerouslySetInnerHTML={{ __html: JSON.stringify(productJsonLd) }}
         />
       )}
+
+      {/* Home-only marketing pop-up for the AI Skin Analyzer (frequency-capped) */}
+      <SkinAnalyzerPromoModal />
 
       <CustomerLayout>
         <HeroBanner banners={banners} />

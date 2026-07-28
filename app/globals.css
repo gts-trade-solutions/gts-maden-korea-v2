@@ -154,3 +154,28 @@
 .mk-scanline {
   animation: mk-scanline 4s ease-in-out infinite;
 }
+
+/* Attention pulse for a primary "next step" CTA — a soft rose/violet glow
+   that breathes so the eye lands on it. Used by the skin-analyzer mobile
+   sticky bar. Honors reduced-motion. */
+@keyframes mk-cta-pulse {
+  0%,
+  100% {
+    box-shadow: 0 8px 22px -6px rgba(244, 63, 94, 0.55),
+      0 0 0 0 rgba(244, 63, 94, 0.45);
+  }
+  50% {
+    box-shadow: 0 10px 26px -6px rgba(139, 92, 246, 0.6),
+      0 0 0 6px rgba(244, 63, 94, 0);
+  }
+}
+
+.mk-cta-pulse {
+  animation: mk-cta-pulse 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mk-cta-pulse {
+    animation: none;
+  }
+}

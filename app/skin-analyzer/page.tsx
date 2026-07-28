@@ -161,6 +161,12 @@ const FEATURED = [
   "age_spot",
 ];
 
+// Highlighted "next step" styling for the mobile sticky CTA — brand gradient +
+// a soft breathing glow (mk-cta-pulse, see globals.css) so it stands out from
+// the white bar and reads as the obvious next action.
+const STICKY_CTA_CLASS =
+  "w-full mk-cta-pulse bg-gradient-to-r from-rose-500 to-violet-600 font-semibold text-white shadow-lg shadow-rose-500/30 hover:from-rose-600 hover:to-violet-700";
+
 export default function SkinAnalyzerPage() {
   const [status, setStatus] = useState<Status | null>(null);
   const [starting, setStarting] = useState(false);
@@ -348,7 +354,7 @@ export default function SkinAnalyzerPage() {
     }
     if (!status.authed) {
       return (
-        <Button asChild className="w-full">
+        <Button asChild className={STICKY_CTA_CLASS}>
           <Link href="/auth/login?redirect=/skin-analyzer">
             <Camera className="mr-2 h-4 w-4" /> Log in & analyze
           </Link>
@@ -361,7 +367,7 @@ export default function SkinAnalyzerPage() {
     const gated = cost > 0;
     if (state.status === "ready" || state.status === "reserved") {
       return (
-        <Button onClick={start} disabled={starting} className="w-full">
+        <Button onClick={start} disabled={starting} className={STICKY_CTA_CLASS}>
           {starting ? (
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
           ) : (
@@ -379,7 +385,7 @@ export default function SkinAnalyzerPage() {
       const canAfford = balance >= cost;
       if (!canAfford) {
         return (
-          <Button asChild className="w-full">
+          <Button asChild className={STICKY_CTA_CLASS}>
             <Link href="/account/k-points">
               <KCoin className="mr-2 h-4 w-4" /> Get K-Points
             </Link>
@@ -387,7 +393,7 @@ export default function SkinAnalyzerPage() {
         );
       }
       return (
-        <Button onClick={start} disabled={starting} className="w-full">
+        <Button onClick={start} disabled={starting} className={STICKY_CTA_CLASS}>
           {starting ? (
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
           ) : (
@@ -401,7 +407,7 @@ export default function SkinAnalyzerPage() {
       <Button
         onClick={requestAccess}
         disabled={requesting || pendingRequest}
-        className="w-full"
+        className={pendingRequest ? "w-full" : STICKY_CTA_CLASS}
       >
         {pendingRequest ? "Request pending review" : "Request another analysis"}
       </Button>
