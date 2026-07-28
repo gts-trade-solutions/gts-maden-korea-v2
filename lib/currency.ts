@@ -22,11 +22,11 @@ export function roundMoney(n: number) {
 
 export type CurrencyCode =
   | "INR" | "USD" | "EUR" | "GBP" | "PLN" | "THB"
-  | "ZAR" | "VND" | "TZS" | "NGN" | "QAR" | "AED";
+  | "ZAR" | "VND" | "TZS" | "NGN" | "QAR" | "AED" | "KRW";
 
 export const SUPPORTED_CURRENCIES: CurrencyCode[] = [
   "INR", "USD", "EUR", "GBP", "PLN", "THB",
-  "ZAR", "VND", "TZS", "NGN", "QAR", "AED",
+  "ZAR", "VND", "TZS", "NGN", "QAR", "AED", "KRW",
 ];
 
 export type CurrencyRate = {
@@ -55,6 +55,7 @@ export const FALLBACK_RATES: Record<CurrencyCode, CurrencyRate> = {
   NGN: { code: "NGN", name: "Nigerian Naira",       symbol: "₦",   decimals: 2, rate_from_inr: 19.5,     active: true },
   QAR: { code: "QAR", name: "Qatari Riyal",         symbol: "﷼",   decimals: 2, rate_from_inr: 0.044,    active: true },
   AED: { code: "AED", name: "UAE Dirham",           symbol: "د.إ", decimals: 2, rate_from_inr: 0.044,    active: true },
+  KRW: { code: "KRW", name: "South Korean Won",     symbol: "₩",   decimals: 0, rate_from_inr: 16,       active: true },
 };
 
 // Locale to use for Intl.NumberFormat per currency. Where there's no
@@ -73,6 +74,7 @@ const FORMAT_LOCALE: Record<CurrencyCode, string> = {
   NGN: "en-NG",
   QAR: "ar-QA",
   AED: "ar-AE",
+  KRW: "ko-KR",
 };
 
 // ISO 3166-1 alpha-2 → currency code. Used by middleware to pick a
@@ -118,6 +120,9 @@ export const COUNTRY_TO_CURRENCY: Record<string, CurrencyCode> = {
 
   // UAE
   AE: "AED",
+
+  // South Korea
+  KR: "KRW",
 };
 
 /** Convert an INR amount into the target currency (no formatting). */
@@ -189,6 +194,7 @@ const RAZORPAY_EXPONENT: Record<CurrencyCode, number> = {
   AED: 2,
   VND: 0,
   THB: 2,
+  KRW: 0, // South Korean won is zero-decimal (no minor unit)
 };
 
 /**

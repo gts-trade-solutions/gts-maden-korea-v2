@@ -12,7 +12,7 @@ import type { SupportedLocale } from "@/lib/locales";
 
 export type CountryCode =
   | "IN" | "US" | "GB"
-  | "PL" | "VN" | "TH"
+  | "PL" | "VN" | "TH" | "KR"
   | "FR" | "DE" | "ES" | "IT" | "PT"
   | "ZA" | "TZ" | "NG" | "QA" | "AE";
 
@@ -27,22 +27,36 @@ export type CountryProfile = {
   defaultCurrency: CurrencyCode;
 };
 
+// NOTE: The key order below IS the display order in the CountrySwitcher
+// (it maps SUPPORTED_COUNTRIES, which is Object.keys(COUNTRY_PROFILES), with
+// no sort). US and South Korea are featured first; India is intentionally
+// placed 10th. This ordering is purely cosmetic — DEFAULT_COUNTRY (below)
+// stays "IN" and remains the geo/currency fallback regardless of position.
 export const COUNTRY_PROFILES: Record<CountryCode, CountryProfile> = {
-  IN: { code: "IN", name: "India",         flag: "🇮🇳", defaultLocale: "en-IN", defaultCurrency: "INR" },
+  // Featured markets — shown first in the switcher.
   US: { code: "US", name: "United States", flag: "🇺🇸", defaultLocale: "en",    defaultCurrency: "USD" },
+  // South Korea — Korean UI bundle (messages/ko.json). KRW is zero-decimal;
+  // formatting handled natively by Intl with ko-KR locale.
+  KR: { code: "KR", name: "South Korea",   flag: "🇰🇷", defaultLocale: "ko",    defaultCurrency: "KRW" },
+
+  // UK + Eurozone
   GB: { code: "GB", name: "United Kingdom",flag: "🇬🇧", defaultLocale: "en",    defaultCurrency: "GBP" },
-
-  PL: { code: "PL", name: "Poland",        flag: "🇵🇱", defaultLocale: "pl",    defaultCurrency: "PLN" },
-  VN: { code: "VN", name: "Vietnam",       flag: "🇻🇳", defaultLocale: "vi",    defaultCurrency: "VND" },
-  // Thailand — Thai UI bundle landed (messages/th.json). Currency
-  // formatting in THB handled natively by Intl with th-TH locale.
-  TH: { code: "TH", name: "Thailand",      flag: "🇹🇭", defaultLocale: "th",    defaultCurrency: "THB" },
-
   FR: { code: "FR", name: "France",        flag: "🇫🇷", defaultLocale: "fr",    defaultCurrency: "EUR" },
   DE: { code: "DE", name: "Germany",       flag: "🇩🇪", defaultLocale: "de",    defaultCurrency: "EUR" },
   ES: { code: "ES", name: "Spain",         flag: "🇪🇸", defaultLocale: "es",    defaultCurrency: "EUR" },
   IT: { code: "IT", name: "Italy",         flag: "🇮🇹", defaultLocale: "it",    defaultCurrency: "EUR" },
   PT: { code: "PT", name: "Portugal",      flag: "🇵🇹", defaultLocale: "pt",    defaultCurrency: "EUR" },
+  // Poland — EU member but keeps the zloty.
+  PL: { code: "PL", name: "Poland",        flag: "🇵🇱", defaultLocale: "pl",    defaultCurrency: "PLN" },
+
+  // India — home market (10th in the list, but still DEFAULT_COUNTRY).
+  IN: { code: "IN", name: "India",         flag: "🇮🇳", defaultLocale: "en-IN", defaultCurrency: "INR" },
+
+  // Other Asia
+  VN: { code: "VN", name: "Vietnam",       flag: "🇻🇳", defaultLocale: "vi",    defaultCurrency: "VND" },
+  // Thailand — Thai UI bundle landed (messages/th.json). Currency
+  // formatting in THB handled natively by Intl with th-TH locale.
+  TH: { code: "TH", name: "Thailand",      flag: "🇹🇭", defaultLocale: "th",    defaultCurrency: "THB" },
 
   // Africa + Middle East currently served as English/local-currency
   // until we add Arabic/Swahili/Hausa coverage in a future phase.
