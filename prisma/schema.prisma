@@ -1978,6 +1978,7 @@ model whatsapp_contacts {
   created_at                 DateTime                     @default(now()) @db.DateTime(6)
   updated_at                 DateTime                     @default(now()) @db.DateTime(6)
   whatsapp_campaign_messages whatsapp_campaign_messages[]
+  whatsapp_inbound_messages  whatsapp_inbound_messages[]
 }
 
 model whatsapp_templates {
@@ -1991,10 +1992,39 @@ model whatsapp_templates {
   body_preview           String?              @db.MediumText
   example_variables      Json?                @default(dbgenerated("(cast(_utf8mb4\\'[]\\' as json))"))
   is_active              Boolean              @default(true)
+  // Meta "direct connect" sync fields — populated by the template-sync job
+  // (GET /{WABA_ID}/message_templates). provider_template_id is Meta's template
+  // id, status is Meta's approval state (APPROVED/PENDING/REJECTED), components
+  // holds the raw Meta component array, synced_at is the last successful pull.
+  provider_template_id   String?              @db.VarChar(255)
+  status                 String?              @db.VarChar(64)
+  components             Json?
+  synced_at              DateTime?            @db.DateTime(6)
   created_by             String?              @db.Char(36)
   created_at             DateTime             @default(now()) @db.DateTime(6)
   updated_at             DateTime             @default(now()) @db.DateTime(6)
   whatsapp_campaigns     whatsapp_campaigns[]
+}
+
+// Inbound WhatsApp messages (customer replies) captured by the Meta webhook.
+// Outbound campaign sends live in whatsapp_campaign_messages; this table is the
+// reply side of the conversation. wa_message_id is Meta's message id (unique →
+// idempotent webhook delivery). contact_id links to a known contact when the
+// sender's phone matches whatsapp_contacts.phone_e164.
+model whatsapp_inbound_messages {
+  id                String             @id @db.Char(36)
+  wa_message_id     String             @unique(map: "whatsapp_inbound_messages_wa_message_id_unique") @db.VarChar(255)
+  from_phone        String             @db.VarChar(255)
+  contact_id        String?            @db.Char(36)
+  type              String             @default("text") @db.VarChar(64)
+  text_body         String?            @db.MediumText
+  raw               Json?
+  received_at       DateTime?          @db.DateTime(6)
+  created_at        DateTime           @default(now()) @db.DateTime(6)
+  whatsapp_contacts whatsapp_contacts? @relation(fields: [contact_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([from_phone], map: "whatsapp_inbound_messages_from_phone_idx")
+  @@index([contact_id], map: "whatsapp_inbound_messages_contact_id_idx")
 }
 
 model wishlist_items {

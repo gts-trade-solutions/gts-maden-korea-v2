@@ -10,7 +10,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Image as ImageIcon, Tag, FileText, LogOut } from "lucide-react";
+import {
+  Image as ImageIcon,
+  Tag,
+  FileText,
+  LogOut,
+  MessageCircle,
+} from "lucide-react";
 import { toast } from "sonner";
 
 export default function AdminCMSPage() {
@@ -39,7 +45,9 @@ export default function AdminCMSPage() {
             <h1 className="text-2xl font-bold">Content Management</h1>
           </div>
           <div className="flex items-center gap-4">
-            <span className="text-sm text-muted-foreground">{user?.name}</span>
+            <span className="text-sm text-muted-foreground">
+              {user?.full_name ?? user?.email}
+            </span>
             <Button variant="outline" size="sm" onClick={handleLogout}>
               <LogOut className="mr-2 h-4 w-4" />
               Logout
@@ -69,6 +77,29 @@ export default function AdminCMSPage() {
                 onClick={() => router.push("/admin/cms/banners")}
               >
                 Manage Banners
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="hover:shadow-lg transition-shadow">
+            <CardHeader>
+              <MessageCircle className="h-8 w-8 mb-2 text-primary" />
+              <CardTitle>WhatsApp Campaign</CardTitle>
+              <CardDescription>
+                Broadcast campaigns via WhatsApp (Meta Cloud API)
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-muted-foreground mb-4">
+                Create campaigns, sync approved templates from Meta, manage
+                contacts, and track delivery, read &amp; replies.
+              </p>
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => router.push("/admin/whatsapp")}
+              >
+                Manage WhatsApp
               </Button>
             </CardContent>
           </Card>
@@ -157,7 +188,7 @@ export default function AdminCMSPage() {
               <ImageIcon className="h-8 w-8 mb-2 text-primary" />
               <CardTitle>K-Partnership Videos</CardTitle>
               <CardDescription>
-                Per-country "How it works" videos
+                Per-country &quot;How it works&quot; videos
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -212,6 +243,27 @@ export default function AdminCMSPage() {
                 onClick={() => router.push("/admin/cms/coupons")}
               >
                 Manage Coupons
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="hover:shadow-lg transition-shadow">
+            <CardHeader>
+              <MessageCircle className="h-8 w-8 mb-2 text-primary" />
+              <CardTitle>WhatsApp Campaign</CardTitle>
+              <CardDescription>Meta-connected broadcast campaigns</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-muted-foreground mb-4">
+                Manage WhatsApp contacts, approved Meta templates, and queued
+                campaign sends from the admin marketing panel.
+              </p>
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => router.push("/admin/whatsapp")}
+              >
+                Open WhatsApp Campaign
               </Button>
             </CardContent>
           </Card>
