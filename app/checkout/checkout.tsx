@@ -15,7 +15,7 @@ import { useCart } from "@/lib/contexts/CartContext";
 import { useCurrency } from "@/lib/contexts/CurrencyContext";
 import { useCountry } from "@/lib/contexts/CountryContext";
 import { useAuth } from "@/lib/contexts/AuthContext";
-import { COUNTRY_PROFILES } from "@/lib/countries";
+import { COUNTRY_PROFILES, countryUsesPostalCode } from "@/lib/countries";
 import { toast } from "sonner";
 import { useRazorpayCheckout } from "@/lib/hooks/useRazorpayCheckout";
 import {
@@ -136,6 +136,15 @@ export default function CheckoutPage() {
   const { isAuthenticated, ready, user } = useAuth();
   const { formatPrice, isINR, currency } = useCurrency();
   const { country, profile: countryProfile } = useCountry();
+  // Address-form behaviour keys off the DESTINATION COUNTRY, not the
+  // display currency. `isINR` (currency) can diverge from the shipping
+  // country when a buyer overrides currency, and the shipping math in
+  // calc-totals already keys on `country !== "IN"` — so the address
+  // inputs, validation, and serviceability must use the same basis or
+  // they contradict the pricing. India = numeric 10-digit phone + 6-digit
+  // PIN + DTDC check; everywhere else = freeform (alphanumeric postal
+  // codes, international phone formats).
+  const shipToIndia = country === "IN";
   const { start } = useRazorpayCheckout();
   const shippingConfig = useShippingConfig();
 
@@ -453,11 +462,27 @@ export default function CheckoutPage() {
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     if (name === "phone") {
-      setFormData({ ...formData, phone: value.replace(/\D/g, "").slice(0, 10) });
+      // India: strip to 10 digits. International: keep the characters a
+      // phone number legitimately uses (+ country code, spaces, hyphens,
+      // parens); cap generously since intl numbers run longer than 10.
+      setFormData({
+        ...formData,
+        phone: shipToIndia
+          ? value.replace(/\D/g, "").slice(0, 10)
+          : value.replace(/[^\d+()\-\s]/g, "").slice(0, 20),
+      });
       return;
     }
     if (name === "pincode") {
-      setFormData({ ...formData, pincode: value.replace(/\D/g, "").slice(0, 6) });
+      // India: numeric 6-digit PIN. International: freeform alphanumeric
+      // postal code (US 5-digit / ZIP+4, UK "SW1A 1AA", Canada "K1A 0B1",
+      // NL "1234 AB", etc.) — do NOT strip letters/spaces.
+      setFormData({
+        ...formData,
+        pincode: shipToIndia
+          ? value.replace(/\D/g, "").slice(0, 6)
+          : value.slice(0, 16),
+      });
       return;
     }
     setFormData({ ...formData, [name]: value });
@@ -559,7 +584,7 @@ export default function CheckoutPage() {
     const phone = formData.phone.replace(/\D/g, "");
     const pincode = formData.pincode.replace(/\D/g, "");
 
-    if (isINR) {
+    if (shipToIndia) {
       if (!/^[6-9]\d{9}$/.test(phone)) {
         toast.error(t("errInvalidPhone"));
         return;
@@ -623,7 +648,7 @@ export default function CheckoutPage() {
       city: formData.city,
       state: formData.state,
       pincode: formData.pincode,
-      country: isINR ? "India" : countryProfile.name,
+      country: shipToIndia ? "India" : countryProfile.name,
       country_code: country,
     };
 
@@ -657,7 +682,7 @@ export default function CheckoutPage() {
           // Use the full country name to match account-settings legacy
           // values (we coerce both back when reading). ISO code is on
           // the order's address_snapshot.country_code for downstream.
-          country: isINR ? "India" : countryProfile.name,
+          country: shipToIndia ? "India" : countryProfile.name,
           is_default: makeDefaultOnSave,
         };
 
@@ -870,13 +895,13 @@ export default function CheckoutPage() {
                         name="phone"
                         type="tel"
                         autoComplete="tel"
-                        inputMode={isINR ? "numeric" : "tel"}
+                        inputMode={shipToIndia ? "numeric" : "tel"}
                         // India: 10-digit mobile starting 6/7/8/9.
                         // International: freeform — country code + local
                         // number, no client-side pattern enforcement.
-                        pattern={isINR ? "[6-9][0-9]{9}" : undefined}
-                        title={isINR ? t("phoneTooltip") : undefined}
-                        maxLength={isINR ? 10 : undefined}
+                        pattern={shipToIndia ? "[6-9][0-9]{9}" : undefined}
+                        title={shipToIndia ? t("phoneTooltip") : undefined}
+                        maxLength={shipToIndia ? 10 : undefined}
                         value={formData.phone}
                         onChange={handleChange}
                         required
@@ -910,7 +935,7 @@ export default function CheckoutPage() {
                     </div>
                     <div>
                       <Label htmlFor="state">
-                        {isINR ? t("stateLabel") : t("stateOptionalLabel")}
+                        {shipToIndia ? t("stateLabel") : t("stateOptionalLabel")}
                       </Label>
                       <Input
                         id="state"
@@ -922,12 +947,12 @@ export default function CheckoutPage() {
                         // (it's part of the GST / GSTIN destination).
                         // Many international addresses have no state
                         // equivalent; relax to optional for non-IN.
-                        required={isINR}
+                        required={shipToIndia}
                       />
                     </div>
                     <div>
                       <Label htmlFor="pincode">
-                        {isINR ? t("pincodeLabel") : t("postalCodeLabel")}
+                        {shipToIndia ? t("pincodeLabel") : t("postalCodeLabel")}
                       </Label>
                       <Input
                         id="pincode"
@@ -939,11 +964,19 @@ export default function CheckoutPage() {
                         // India = 6-digit numeric PIN. International =
                         // freeform postal code (UK alphanumerics, EU 4-5
                         // digit, etc. — we can't validate per country).
-                        inputMode={isINR ? "numeric" : "text"}
-                        pattern={isINR ? "\\d{6}" : undefined}
-                        title={isINR ? t("pincodeTooltip") : undefined}
-                        maxLength={isINR ? 6 : 16}
+                        inputMode={shipToIndia ? "numeric" : "text"}
+                        pattern={shipToIndia ? "\\d{6}" : undefined}
+                        title={shipToIndia ? t("pincodeTooltip") : undefined}
+                        maxLength={shipToIndia ? 6 : 16}
                       />
+                      {/* Some markets (UAE, Qatar) have no postal-code
+                          system, but the field is required — tell the buyer
+                          to enter 000000 so they aren't blocked. */}
+                      {!countryUsesPostalCode(country) && (
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {t("postalCodeNotRequiredHint")}
+                        </p>
+                      )}
                     </div>
                   </div>
 

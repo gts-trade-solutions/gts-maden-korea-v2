@@ -901,6 +901,7 @@
     "stateOptionalLabel": "주 / 지역",
     "pincodeLabel": "우편번호 *",
     "postalCodeLabel": "우편번호 *",
+    "postalCodeNotRequiredHint": "우편번호가 없는 지역이라면 000000을 입력하세요.",
     "pincodeTooltip": "유효한 6자리 우편번호를 입력하세요",
     "paymentMethodHeading": "결제 수단",
     "summaryHeading": "주문 요약",

@@ -899,6 +899,7 @@
     "stateOptionalLabel": "Stan / Region",
     "pincodeLabel": "Kod pocztowy *",
     "postalCodeLabel": "Kod pocztowy *",
+    "postalCodeNotRequiredHint": "Jeśli Twoja lokalizacja nie używa kodu pocztowego, wpisz 000000.",
     "pincodeTooltip": "Wpisz ważny 6-cyfrowy kod pocztowy",
     "paymentMethodHeading": "Metoda płatności",
     "summaryHeading": "Podsumowanie zamówienia",

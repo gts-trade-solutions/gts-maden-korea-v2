@@ -901,6 +901,7 @@
     "stateOptionalLabel": "State / Region",
     "pincodeLabel": "Postal Code *",
     "postalCodeLabel": "Postal code *",
+    "postalCodeNotRequiredHint": "If your location doesn't use a postal code, enter 000000.",
     "pincodeTooltip": "Enter a valid postal code",
     "paymentMethodHeading": "Payment Method",
     "summaryHeading": "Order Summary",

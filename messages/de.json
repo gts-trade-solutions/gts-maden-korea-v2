@@ -899,6 +899,7 @@
     "stateOptionalLabel": "Bundesland / Region",
     "pincodeLabel": "Postleitzahl *",
     "postalCodeLabel": "Postleitzahl *",
+    "postalCodeNotRequiredHint": "Wenn an Ihrem Standort keine Postleitzahl verwendet wird, geben Sie 000000 ein.",
     "pincodeTooltip": "Geben Sie eine gültige 6-stellige Postleitzahl ein",
     "paymentMethodHeading": "Zahlungsart",
     "summaryHeading": "Bestellübersicht",

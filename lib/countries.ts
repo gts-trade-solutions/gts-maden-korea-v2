@@ -80,3 +80,16 @@ export function getCountryProfile(code: string | null | undefined): CountryProfi
   const upper = code.toUpperCase();
   return isSupportedCountry(upper) ? COUNTRY_PROFILES[upper] : null;
 }
+
+// Countries in our catalog with no national postal-code system. Their
+// address/checkout forms surface a hint telling the buyer to enter
+// "000000" so the required postal-code field can still be satisfied.
+// (UAE and Qatar have no postal codes; the rest of our markets do.)
+export const NO_POSTAL_CODE_COUNTRIES: CountryCode[] = ["AE", "QA"];
+
+/** True if the country uses postal codes. Unknown codes assume yes. */
+export function countryUsesPostalCode(code: string | null | undefined): boolean {
+  const profile = getCountryProfile(code);
+  if (!profile) return true;
+  return !NO_POSTAL_CODE_COUNTRIES.includes(profile.code);
+}

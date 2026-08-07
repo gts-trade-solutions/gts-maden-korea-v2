@@ -899,6 +899,7 @@
     "stateOptionalLabel": "รัฐ / ภูมิภาค",
     "pincodeLabel": "รหัสไปรษณีย์ *",
     "postalCodeLabel": "รหัสไปรษณีย์ *",
+    "postalCodeNotRequiredHint": "หากพื้นที่ของคุณไม่มีรหัสไปรษณีย์ ให้กรอก 000000",
     "pincodeTooltip": "ป้อนรหัสไปรษณีย์ที่ถูกต้อง",
     "paymentMethodHeading": "วิธีการชำระเงิน",
     "summaryHeading": "สรุปคำสั่งซื้อ",

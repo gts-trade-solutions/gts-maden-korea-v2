@@ -899,6 +899,7 @@
     "stateOptionalLabel": "Stato / Regione",
     "pincodeLabel": "CAP *",
     "postalCodeLabel": "Codice postale *",
+    "postalCodeNotRequiredHint": "Se la tua località non utilizza un codice postale, inserisci 000000.",
     "pincodeTooltip": "Inserisci un CAP valido di 6 cifre",
     "paymentMethodHeading": "Metodo di pagamento",
     "summaryHeading": "Riepilogo ordine",

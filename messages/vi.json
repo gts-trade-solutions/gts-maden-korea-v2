@@ -899,6 +899,7 @@
     "stateOptionalLabel": "Tỉnh / Khu vực",
     "pincodeLabel": "Mã bưu chính *",
     "postalCodeLabel": "Mã bưu chính *",
+    "postalCodeNotRequiredHint": "Nếu khu vực của bạn không dùng mã bưu chính, hãy nhập 000000.",
     "pincodeTooltip": "Nhập mã bưu chính hợp lệ gồm 6 chữ số",
     "paymentMethodHeading": "Phương thức thanh toán",
     "summaryHeading": "Tóm tắt đơn hàng",

@@ -899,6 +899,7 @@
     "stateOptionalLabel": "État / Région",
     "pincodeLabel": "Code postal *",
     "postalCodeLabel": "Code postal *",
+    "postalCodeNotRequiredHint": "Si votre localité n'utilise pas de code postal, saisissez 000000.",
     "pincodeTooltip": "Entrez un code postal valide à 6 chiffres",
     "paymentMethodHeading": "Mode de paiement",
     "summaryHeading": "Résumé de la commande",
