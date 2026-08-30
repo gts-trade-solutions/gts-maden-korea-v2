@@ -104,6 +104,37 @@ export const authOptions: NextAuthOptions = {
       } catch (e) {
         console.error("[authOptions] createUser profiles upsert failed:", e);
       }
+
+      // K-Points signup bonus for OAuth sign-ups.
+      //
+      // The bonus was only ever granted in /api/auth/register, which is the
+      // PASSWORD path — and almost nobody uses it any more (the last password
+      // signup was 2026-07-18; every account since has been Google or
+      // Facebook). Those users are created by the PrismaAdapter, which knows
+      // nothing about K-Points, so the welcome bonus silently never landed and
+      // an admin had to press the backfill button to catch people up.
+      //
+      // Same call the register route makes, so the two paths cannot drift.
+      // Deliberately in its OWN try/catch, after the profiles upsert: a points
+      // failure must never cost the user their profile row or their sign-in.
+      // earn() is idempotent per (sourceType, sourceId, reason), so anyone
+      // already credited by the backfill cannot be paid twice.
+      try {
+        const { getEarnRule } = await import("@/lib/k-points/config");
+        const { earn } = await import("@/lib/k-points/service");
+        const rule = await getEarnRule("signup");
+        if (rule.enabled && rule.value > 0) {
+          await earn({
+            userId: user.id,
+            points: Math.floor(rule.value),
+            reason: "signup",
+            sourceType: "user",
+            sourceId: user.id,
+          });
+        }
+      } catch (e) {
+        console.error("[authOptions] createUser k-points signup bonus failed:", e);
+      }
     },
   },
 };

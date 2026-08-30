@@ -44,6 +44,28 @@ export async function signup(formData: FormData) {
     redirect(`/auth/register?error=${encodeURIComponent('Could not create your account. Please try again.')}`)
   }
 
+  // K-Points signup bonus. The third door into account creation, and the third
+  // place this has to be said: /api/auth/register grants it, authOptions'
+  // createUser grants it for OAuth, and this legacy action did not — so anyone
+  // arriving through here started with nothing. Best-effort and idempotent per
+  // user, so a points failure never costs them the account they just made.
+  try {
+    const { getEarnRule } = await import('@/lib/k-points/config')
+    const { earn } = await import('@/lib/k-points/service')
+    const rule = await getEarnRule('signup')
+    if (rule.enabled && rule.value > 0) {
+      await earn({
+        userId: id,
+        points: Math.floor(rule.value),
+        reason: 'signup',
+        sourceType: 'user',
+        sourceId: id,
+      })
+    }
+  } catch (e) {
+    console.error('[register/action] k-points signup bonus failed:', e)
+  }
+
   // No server-side session from a server action — send them to sign in.
   redirect('/auth/login')
 }
